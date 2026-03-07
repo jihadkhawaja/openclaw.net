@@ -27,6 +27,9 @@ obj/
 .env.*
 appsettings.Development.json
 appsettings.Local.json
+Seattle EDP Advanced CFMP.csv
+Seattle EDP Advanced CFMP.xlsx
+Student Assessment.xlsx
 
 # Playwright
 .playwright/
