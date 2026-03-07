@@ -5,7 +5,7 @@ using OpenClaw.Core.Models;
 
 namespace OpenClaw.Core.Memory;
 
-public sealed class SqliteMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemoryRetentionStore, IDisposable
+public sealed class SqliteMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemoryRetentionStore, ISessionAdminStore, IDisposable
 {
     private readonly string _dbPath;
     private readonly bool _enableFtsRequested;
@@ -729,5 +729,76 @@ public sealed class SqliteMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemory
     public void Dispose()
     {
         // No pooled resources at the moment; connections are per-call.
+    }
+
+    // ── ISessionAdminStore ────────────────────────────────────────────────
+
+    public async ValueTask<PagedSessionList> ListSessionsAsync(
+        int page, int pageSize, SessionListQuery query, CancellationToken ct)
+    {
+        page = Math.Max(1, page);
+        pageSize = Math.Clamp(pageSize, 1, 200);
+
+        await using var conn = new SqliteConnection(ConnectionString);
+        await conn.OpenAsync(ct);
+
+        // Build a filtered count + paged query
+        var where = new System.Text.StringBuilder("WHERE 1=1");
+        if (!string.IsNullOrEmpty(query.ChannelId))
+            where.Append(" AND json_extract(json,'$.channelId') = $channelId");
+        if (!string.IsNullOrEmpty(query.SenderId))
+            where.Append(" AND json_extract(json,'$.senderId') = $senderId");
+        if (!string.IsNullOrEmpty(query.Search))
+            where.Append(" AND (id LIKE $search OR json_extract(json,'$.channelId') LIKE $search OR json_extract(json,'$.senderId') LIKE $search)");
+
+        await using var countCmd = conn.CreateCommand();
+        countCmd.CommandText = $"SELECT COUNT(*) FROM sessions {where}";
+        if (!string.IsNullOrEmpty(query.ChannelId)) countCmd.Parameters.AddWithValue("$channelId", query.ChannelId);
+        if (!string.IsNullOrEmpty(query.SenderId)) countCmd.Parameters.AddWithValue("$senderId", query.SenderId);
+        if (!string.IsNullOrEmpty(query.Search)) countCmd.Parameters.AddWithValue("$search", $"%{query.Search}%");
+
+        var total = Convert.ToInt32(await countCmd.ExecuteScalarAsync(ct) ?? 0);
+        var skip = (page - 1) * pageSize;
+
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = $"""
+            SELECT json FROM sessions {where}
+            ORDER BY updated_at DESC
+            LIMIT $limit OFFSET $offset;
+            """;
+        if (!string.IsNullOrEmpty(query.ChannelId)) cmd.Parameters.AddWithValue("$channelId", query.ChannelId);
+        if (!string.IsNullOrEmpty(query.SenderId)) cmd.Parameters.AddWithValue("$senderId", query.SenderId);
+        if (!string.IsNullOrEmpty(query.Search)) cmd.Parameters.AddWithValue("$search", $"%{query.Search}%");
+        cmd.Parameters.AddWithValue("$limit", pageSize);
+        cmd.Parameters.AddWithValue("$offset", skip);
+
+        var items = new List<SessionSummary>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            var session = JsonSerializer.Deserialize(reader.GetString(0), CoreJsonContext.Default.Session);
+            if (session is null) continue;
+            items.Add(new SessionSummary
+            {
+                Id = session.Id,
+                ChannelId = session.ChannelId,
+                SenderId = session.SenderId,
+                CreatedAt = session.CreatedAt,
+                LastActiveAt = session.LastActiveAt,
+                State = session.State,
+                HistoryTurns = session.History.Count,
+                TotalInputTokens = session.TotalInputTokens,
+                TotalOutputTokens = session.TotalOutputTokens,
+                IsActive = false
+            });
+        }
+
+        return new PagedSessionList
+        {
+            Page = page,
+            PageSize = pageSize,
+            HasMore = total > skip + pageSize,
+            Items = items
+        };
     }
 }

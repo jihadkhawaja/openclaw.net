@@ -13,7 +13,7 @@ namespace OpenClaw.Core.Memory;
 /// Sessions and notes are stored as JSON files with URL-safe base64 encoded filenames
 /// to prevent path traversal attacks. Includes in-memory LRU cache for sessions.
 /// </summary>
-public sealed class FileMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemoryRetentionStore
+public sealed class FileMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemoryRetentionStore, ISessionAdminStore
 {
     private readonly string _basePath;
     private readonly string _sessionsPath;
@@ -733,5 +733,74 @@ public sealed class FileMemoryStore : IMemoryStore, IMemoryNoteSearch, IMemoryRe
             // If decode fails, return the encoded string (shouldn't happen in normal operation)
             return encoded;
         }
+    }
+
+    // ── ISessionAdminStore ────────────────────────────────────────────────
+
+    public async ValueTask<PagedSessionList> ListSessionsAsync(
+        int page, int pageSize, SessionListQuery query, CancellationToken ct)
+    {
+        page = Math.Max(1, page);
+        pageSize = Math.Clamp(pageSize, 1, 200);
+
+        IEnumerable<string> files;
+        try { files = Directory.EnumerateFiles(_sessionsPath, "*.json"); }
+        catch { files = []; }
+
+        var summaries = new List<SessionSummary>();
+        foreach (var file in files)
+        {
+            ct.ThrowIfCancellationRequested();
+            try
+            {
+                var json = await File.ReadAllTextAsync(file, ct);
+                var session = JsonSerializer.Deserialize(json, CoreJsonContext.Default.Session);
+                if (session is null) continue;
+
+                if (!string.IsNullOrEmpty(query.ChannelId) &&
+                    !string.Equals(session.ChannelId, query.ChannelId, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                if (!string.IsNullOrEmpty(query.SenderId) &&
+                    !string.Equals(session.SenderId, query.SenderId, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                if (!string.IsNullOrEmpty(query.Search))
+                {
+                    var s = query.Search;
+                    if (!session.Id.Contains(s, StringComparison.OrdinalIgnoreCase) &&
+                        !session.ChannelId.Contains(s, StringComparison.OrdinalIgnoreCase) &&
+                        !session.SenderId.Contains(s, StringComparison.OrdinalIgnoreCase))
+                        continue;
+                }
+
+                summaries.Add(new SessionSummary
+                {
+                    Id = session.Id,
+                    ChannelId = session.ChannelId,
+                    SenderId = session.SenderId,
+                    CreatedAt = session.CreatedAt,
+                    LastActiveAt = session.LastActiveAt,
+                    State = session.State,
+                    HistoryTurns = session.History.Count,
+                    TotalInputTokens = session.TotalInputTokens,
+                    TotalOutputTokens = session.TotalOutputTokens,
+                    IsActive = false
+                });
+            }
+            catch { /* skip corrupt files */ }
+        }
+
+        summaries.Sort((a, b) => b.LastActiveAt.CompareTo(a.LastActiveAt));
+
+        var skip = (page - 1) * pageSize;
+        var items = summaries.Skip(skip).Take(pageSize).ToList();
+        return new PagedSessionList
+        {
+            Page = page,
+            PageSize = pageSize,
+            HasMore = summaries.Count > skip + pageSize,
+            Items = items
+        };
     }
 }
