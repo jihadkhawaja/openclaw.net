@@ -1,0 +1,1305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>OpenClaw.NET Admin</title>
+    <style>
+        :root {
+            color-scheme: dark;
+            --bg: #0b1020;
+            --panel: rgba(15, 23, 42, 0.88);
+            --panel-2: rgba(30, 41, 59, 0.82);
+            --border: rgba(148, 163, 184, 0.18);
+            --text: #e5e7eb;
+            --muted: #94a3b8;
+            --accent: #8b5cf6;
+            --ok: #22c55e;
+            --warn: #f59e0b;
+        }
+
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            font-family: Inter, system-ui, sans-serif;
+            background: radial-gradient(circle at top, rgba(139, 92, 246, 0.12), transparent 40%), var(--bg);
+            color: var(--text);
+        }
+
+        header, section {
+            width: min(1200px, calc(100vw - 2rem));
+            margin: 0 auto;
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 1rem;
+            padding: 1.25rem 0;
+        }
+
+        .brand a, .toolbar a { color: var(--text); text-decoration: none; }
+        .brand strong { font-size: 1.2rem; }
+        .toolbar {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            flex-wrap: wrap;
+        }
+
+        input, button, select, textarea {
+            background: var(--panel-2);
+            border: 1px solid var(--border);
+            color: var(--text);
+            border-radius: 10px;
+            padding: 0.7rem 0.9rem;
+            font: inherit;
+        }
+
+        input[type="password"] { min-width: 260px; }
+        button, .toolbar a {
+            cursor: pointer;
+            padding: 0.7rem 1rem;
+            border-radius: 10px;
+            background: linear-gradient(135deg, rgba(139, 92, 246, 0.85), rgba(59, 130, 246, 0.85));
+        }
+
+        .toolbar a {
+            display: inline-flex;
+            align-items: center;
+        }
+
+        .section-nav {
+            width: min(1200px, calc(100vw - 2rem));
+            margin: 0 auto 1rem;
+            display: flex;
+            gap: 0.6rem;
+            flex-wrap: wrap;
+        }
+
+        .section-nav a {
+            color: var(--muted);
+            text-decoration: none;
+            border: 1px solid var(--border);
+            border-radius: 999px;
+            padding: 0.45rem 0.8rem;
+            background: rgba(15, 23, 42, 0.55);
+        }
+
+        .flash {
+            width: min(1200px, calc(100vw - 2rem));
+            margin: 0 auto 1rem;
+            padding: 0.85rem 1rem;
+            border-radius: 14px;
+            border: 1px solid var(--border);
+            background: rgba(15, 23, 42, 0.8);
+            display: none;
+        }
+
+        .flash.ok { display: block; border-color: rgba(34, 197, 94, 0.45); }
+        .flash.warn { display: block; border-color: rgba(245, 158, 11, 0.45); }
+        .flash.error { display: block; border-color: rgba(248, 113, 113, 0.45); }
+
+        main {
+            display: grid;
+            gap: 1rem;
+            padding-bottom: 2rem;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 1rem;
+        }
+
+        .card {
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 18px;
+            padding: 1rem;
+            backdrop-filter: blur(14px);
+        }
+
+        .card h2, .card h3 {
+            margin: 0 0 0.75rem;
+            font-size: 1rem;
+        }
+
+        .muted { color: var(--muted); }
+        .status.ok { color: var(--ok); }
+        .status.warn { color: var(--warn); }
+
+        pre {
+            white-space: pre-wrap;
+            word-break: break-word;
+            background: rgba(15, 23, 42, 0.7);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 0.9rem;
+            max-height: 320px;
+            overflow: auto;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.92rem;
+        }
+
+        th, td {
+            text-align: left;
+            padding: 0.55rem 0.35rem;
+            border-bottom: 1px solid var(--border);
+            vertical-align: top;
+        }
+
+        .actions {
+            display: flex;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+        }
+
+        .actions button.secondary {
+            background: var(--panel-2);
+        }
+
+        .filters {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 0.6rem;
+            margin-bottom: 0.9rem;
+        }
+
+        .pill-row {
+            display: flex;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+            margin-top: 0.75rem;
+        }
+
+        .pill {
+            border: 1px solid var(--border);
+            border-radius: 999px;
+            padding: 0.45rem 0.7rem;
+            background: rgba(15, 23, 42, 0.7);
+            color: var(--muted);
+            font-size: 0.85rem;
+        }
+
+        .section-title {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            gap: 1rem;
+            margin-bottom: 0.8rem;
+        }
+
+        .settings-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 0.8rem;
+            margin-top: 0.8rem;
+        }
+
+        .field {
+            display: grid;
+            gap: 0.35rem;
+        }
+
+        .field label {
+            color: var(--muted);
+            font-size: 0.9rem;
+        }
+
+        .apply-badge {
+            display: inline-flex;
+            align-items: center;
+            margin-left: 0.45rem;
+            padding: 0.1rem 0.45rem;
+            border-radius: 999px;
+            border: 1px solid var(--border);
+            font-size: 0.72rem;
+            color: var(--muted);
+            background: rgba(15, 23, 42, 0.7);
+        }
+
+        .apply-badge.live {
+            border-color: rgba(34, 197, 94, 0.35);
+            color: #86efac;
+        }
+
+        .apply-badge.restart {
+            border-color: rgba(245, 158, 11, 0.35);
+            color: #fcd34d;
+        }
+
+        .field.checkbox {
+            display: flex;
+            align-items: center;
+            gap: 0.55rem;
+            padding-top: 1.8rem;
+        }
+
+        .field.checkbox label {
+            color: var(--text);
+            font-size: 0.95rem;
+        }
+
+        .settings-meta {
+            display: grid;
+            gap: 0.35rem;
+            margin-top: 0.8rem;
+        }
+
+        .list {
+            margin: 0;
+            padding-left: 1.1rem;
+            color: var(--muted);
+        }
+
+        .readiness-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 0.8rem;
+            margin-top: 0.8rem;
+        }
+
+        .readiness-card {
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            padding: 0.8rem;
+            background: rgba(15, 23, 42, 0.65);
+        }
+
+        .readiness-card.ready { border-color: rgba(34, 197, 94, 0.35); }
+        .readiness-card.degraded { border-color: rgba(245, 158, 11, 0.35); }
+        .readiness-card.misconfigured { border-color: rgba(248, 113, 113, 0.35); }
+
+        .reference-list {
+            display: grid;
+            gap: 0.55rem;
+            margin-top: 0.8rem;
+        }
+
+        .reference-item {
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 0.7rem 0.8rem;
+            background: rgba(15, 23, 42, 0.55);
+        }
+
+        .reference-item code {
+            display: block;
+            margin-top: 0.2rem;
+            color: var(--text);
+            word-break: break-word;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="brand">
+            <strong><a href="/chat">OpenClaw.NET Admin</a></strong>
+            <div class="muted">Authenticated control plane for doctor, approvals, sessions, retention, pairing, and allowlists.</div>
+        </div>
+        <div class="toolbar">
+            <span id="session-status" class="muted">Checking auth…</span>
+            <input id="token-input" type="password" placeholder="Auth token for public deployments">
+            <label><input id="remember-token" type="checkbox"> Remember</label>
+            <button id="login-button">Login</button>
+            <button id="logout-button">Logout</button>
+            <button id="refresh-button">Refresh</button>
+            <a href="/chat">Open Chat</a>
+        </div>
+    </header>
+
+    <nav class="section-nav">
+        <a href="#overview-section">Overview</a>
+        <a href="#sessions-section">Sessions</a>
+        <a href="#settings-section">Settings</a>
+        <a href="#channels-section">Channels</a>
+    </nav>
+
+    <div id="flash" class="flash"></div>
+
+    <main>
+        <section id="overview-section" class="grid">
+            <div class="card">
+                <h2>Summary</h2>
+                <div id="summary-pills" class="pill-row"></div>
+                <pre id="summary-output">Loading…</pre>
+            </div>
+            <div class="card">
+                <h2>Doctor</h2>
+                <pre id="doctor-output">Loading…</pre>
+            </div>
+        </section>
+
+        <section class="grid">
+            <div class="card">
+                <h2>Retention</h2>
+                <div class="actions">
+                    <button id="retention-status-button" class="secondary">Reload Status</button>
+                    <button id="retention-dry-run-button">Dry Run Sweep</button>
+                    <button id="retention-run-button">Run Sweep</button>
+                </div>
+                <pre id="retention-output">Loading…</pre>
+            </div>
+            <div class="card">
+                <h2>Pending Approvals</h2>
+                <div class="actions">
+                    <button id="approvals-refresh-button" class="secondary">Reload Approvals</button>
+                </div>
+                <div id="approvals-output" class="muted">Loading…</div>
+            </div>
+        </section>
+
+        <section id="sessions-section" class="grid">
+            <div class="card">
+                <h2>Sessions</h2>
+                <div class="filters">
+                    <input id="session-search-input" type="text" placeholder="Search by ID, channel, sender">
+                    <input id="session-channel-input" type="text" placeholder="Channel filter">
+                    <input id="session-sender-input" type="text" placeholder="Sender filter">
+                    <select id="session-page-size">
+                        <option value="10">10 per page</option>
+                        <option value="25" selected>25 per page</option>
+                        <option value="50">50 per page</option>
+                    </select>
+                </div>
+                <div class="actions">
+                    <button id="sessions-apply-button">Apply Filters</button>
+                    <button id="sessions-refresh-button" class="secondary">Reload Sessions</button>
+                    <button id="sessions-prev-button" class="secondary">Prev Page</button>
+                    <button id="sessions-next-button" class="secondary">Next Page</button>
+                    <span id="sessions-page-label" class="muted">Page 1</span>
+                </div>
+                <div id="sessions-output" class="muted">Loading…</div>
+            </div>
+            <div class="card">
+                <h2>Session Detail</h2>
+                <pre id="session-detail-output">Select a session.</pre>
+                <div id="session-branches-output" class="muted"></div>
+            </div>
+        </section>
+
+        <section id="settings-section" class="grid">
+            <div class="card">
+                <div class="section-title">
+                    <div>
+                        <h2>Settings</h2>
+                        <div class="muted">UI-managed overrides persist to a local admin settings file and survive restarts.</div>
+                    </div>
+                    <div class="actions">
+                        <button id="settings-reload-button" class="secondary">Reload</button>
+                        <button id="settings-reset-button" class="secondary">Clear Overrides</button>
+                        <button id="settings-save-button">Save Settings</button>
+                    </div>
+                </div>
+                <div class="settings-grid">
+                    <div class="field">
+                        <label for="usage-footer-input">Usage footer</label>
+                        <select id="usage-footer-input">
+                            <option value="off">Off</option>
+                            <option value="tokens">Tokens</option>
+                            <option value="full">Full</option>
+                        </select>
+                    </div>
+                    <div class="field">
+                        <label for="max-concurrent-sessions-input">Max concurrent sessions</label>
+                        <input id="max-concurrent-sessions-input" type="number" min="1">
+                    </div>
+                    <div class="field">
+                        <label for="session-timeout-input">Session timeout (minutes)</label>
+                        <input id="session-timeout-input" type="number" min="1">
+                    </div>
+                    <div class="field">
+                        <label for="session-budget-input">Session token budget</label>
+                        <input id="session-budget-input" type="number" min="0">
+                    </div>
+                    <div class="field">
+                        <label for="session-rate-limit-input">Session rate limit per minute</label>
+                        <input id="session-rate-limit-input" type="number" min="0">
+                    </div>
+                    <div class="field checkbox">
+                        <input id="allow-query-token-input" type="checkbox">
+                        <label for="allow-query-token-input">Allow deprecated query-string token auth</label>
+                    </div>
+                    <div class="field">
+                        <label for="browser-idle-minutes-input">Browser session idle minutes</label>
+                        <input id="browser-idle-minutes-input" type="number" min="5">
+                    </div>
+                    <div class="field">
+                        <label for="browser-remember-days-input">Browser remember days</label>
+                        <input id="browser-remember-days-input" type="number" min="1">
+                    </div>
+                    <div class="field">
+                        <label for="autonomy-mode-input">Autonomy mode</label>
+                        <select id="autonomy-mode-input">
+                            <option value="readonly">Read-only</option>
+                            <option value="supervised">Supervised</option>
+                            <option value="full">Full</option>
+                        </select>
+                    </div>
+                    <div class="field checkbox">
+                        <input id="require-approval-input" type="checkbox">
+                        <label for="require-approval-input">Require tool approval</label>
+                    </div>
+                    <div class="field">
+                        <label for="approval-timeout-input">Approval timeout (seconds)</label>
+                        <input id="approval-timeout-input" type="number" min="0">
+                    </div>
+                    <div class="field checkbox">
+                        <input id="parallel-tools-input" type="checkbox">
+                        <label for="parallel-tools-input">Parallel tool execution</label>
+                    </div>
+                    <div class="field checkbox">
+                        <input id="allow-shell-input" type="checkbox">
+                        <label for="allow-shell-input">Allow shell tool</label>
+                    </div>
+                    <div class="field checkbox">
+                        <input id="read-only-mode-input" type="checkbox">
+                        <label for="read-only-mode-input">Read-only tooling mode</label>
+                    </div>
+                    <div class="field checkbox">
+                        <input id="enable-browser-tool-input" type="checkbox">
+                        <label for="enable-browser-tool-input">Enable browser tool</label>
+                    </div>
+                    <div class="field checkbox">
+                        <input id="allow-browser-evaluate-input" type="checkbox">
+                        <label for="allow-browser-evaluate-input">Allow browser evaluation</label>
+                    </div>
+                    <div class="field">
+                        <label for="max-history-turns-input">Max history turns</label>
+                        <input id="max-history-turns-input" type="number" min="1">
+                    </div>
+                    <div class="field checkbox">
+                        <input id="enable-compaction-input" type="checkbox">
+                        <label for="enable-compaction-input">Enable history compaction</label>
+                    </div>
+                    <div class="field">
+                        <label for="compaction-threshold-input">Compaction threshold</label>
+                        <input id="compaction-threshold-input" type="number" min="4">
+                    </div>
+                    <div class="field">
+                        <label for="compaction-keep-recent-input">Compaction keep recent</label>
+                        <input id="compaction-keep-recent-input" type="number" min="2">
+                    </div>
+                    <div class="field checkbox">
+                        <input id="retention-enabled-input" type="checkbox">
+                        <label for="retention-enabled-input">Enable retention sweeper</label>
+                    </div>
+                    <div class="field checkbox">
+                        <input id="retention-run-startup-input" type="checkbox">
+                        <label for="retention-run-startup-input">Run retention on startup</label>
+                    </div>
+                    <div class="field">
+                        <label for="retention-interval-input">Retention interval (minutes)</label>
+                        <input id="retention-interval-input" type="number" min="5">
+                    </div>
+                    <div class="field">
+                        <label for="retention-session-ttl-input">Session TTL (days)</label>
+                        <input id="retention-session-ttl-input" type="number" min="1">
+                    </div>
+                    <div class="field">
+                        <label for="retention-branch-ttl-input">Branch TTL (days)</label>
+                        <input id="retention-branch-ttl-input" type="number" min="1">
+                    </div>
+                    <div class="field checkbox">
+                        <input id="retention-archive-enabled-input" type="checkbox">
+                        <label for="retention-archive-enabled-input">Archive retained content</label>
+                    </div>
+                    <div class="field">
+                        <label for="retention-archive-ttl-input">Archive retention (days)</label>
+                        <input id="retention-archive-ttl-input" type="number" min="1">
+                    </div>
+                    <div class="field">
+                        <label for="retention-max-items-input">Retention max items per sweep</label>
+                        <input id="retention-max-items-input" type="number" min="10">
+                    </div>
+                    <div class="field">
+                        <label for="allowlist-semantics-input">Allowlist semantics <span class="apply-badge" data-field-key="channels.allowlistSemantics"></span></label>
+                        <select id="allowlist-semantics-input">
+                            <option value="legacy">Legacy</option>
+                            <option value="strict">Strict</option>
+                        </select>
+                    </div>
+                    <div class="field checkbox">
+                        <input id="sms-enabled-input" type="checkbox">
+                        <label for="sms-enabled-input">SMS channel enabled <span class="apply-badge" data-field-key="channels.sms.enabled"></span></label>
+                    </div>
+                    <div class="field checkbox">
+                        <input id="sms-validate-signature-input" type="checkbox">
+                        <label for="sms-validate-signature-input">SMS webhook signature validation <span class="apply-badge" data-field-key="channels.sms.validateSignature"></span></label>
+                    </div>
+                    <div class="field">
+                        <label for="sms-dm-policy-input">SMS DM policy <span class="apply-badge" data-field-key="channels.sms.dmPolicy"></span></label>
+                        <select id="sms-dm-policy-input">
+                            <option value="open">Open</option>
+                            <option value="pairing">Pairing</option>
+                            <option value="closed">Closed</option>
+                        </select>
+                    </div>
+                    <div class="field checkbox">
+                        <input id="telegram-enabled-input" type="checkbox">
+                        <label for="telegram-enabled-input">Telegram channel enabled <span class="apply-badge" data-field-key="channels.telegram.enabled"></span></label>
+                    </div>
+                    <div class="field checkbox">
+                        <input id="telegram-validate-signature-input" type="checkbox">
+                        <label for="telegram-validate-signature-input">Telegram webhook secret validation <span class="apply-badge" data-field-key="channels.telegram.validateSignature"></span></label>
+                    </div>
+                    <div class="field">
+                        <label for="telegram-dm-policy-input">Telegram DM policy <span class="apply-badge" data-field-key="channels.telegram.dmPolicy"></span></label>
+                        <select id="telegram-dm-policy-input">
+                            <option value="open">Open</option>
+                            <option value="pairing">Pairing</option>
+                            <option value="closed">Closed</option>
+                        </select>
+                    </div>
+                    <div class="field checkbox">
+                        <input id="whatsapp-enabled-input" type="checkbox">
+                        <label for="whatsapp-enabled-input">WhatsApp channel enabled <span class="apply-badge" data-field-key="channels.whatsapp.enabled"></span></label>
+                    </div>
+                    <div class="field checkbox">
+                        <input id="whatsapp-validate-signature-input" type="checkbox">
+                        <label for="whatsapp-validate-signature-input">WhatsApp inbound signature validation <span class="apply-badge" data-field-key="channels.whatsapp.validateSignature"></span></label>
+                    </div>
+                    <div class="field">
+                        <label for="whatsapp-dm-policy-input">WhatsApp DM policy <span class="apply-badge" data-field-key="channels.whatsapp.dmPolicy"></span></label>
+                        <select id="whatsapp-dm-policy-input">
+                            <option value="open">Open</option>
+                            <option value="pairing">Pairing</option>
+                            <option value="closed">Closed</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="settings-meta">
+                    <div id="settings-status" class="muted">Loading settings…</div>
+                    <div id="settings-persistence" class="muted"></div>
+                    <ul id="settings-restart-fields" class="list"></ul>
+                    <ul id="settings-warnings" class="list"></ul>
+                    <div id="settings-readiness" class="readiness-grid"></div>
+                    <div class="reference-list">
+                        <div class="reference-item" id="setup-ref-sms-auth-token"><strong>Twilio auth token ref</strong><code>OpenClaw:Channels:Sms:Twilio:AuthTokenRef = env:TWILIO_AUTH_TOKEN</code></div>
+                        <div class="reference-item" id="setup-ref-sms-account-sid"><strong>Twilio account SID</strong><code>OpenClaw:Channels:Sms:Twilio:AccountSid</code></div>
+                        <div class="reference-item" id="setup-ref-sms-sender"><strong>Twilio sender</strong><code>OpenClaw:Channels:Sms:Twilio:MessagingServiceSid or OpenClaw:Channels:Sms:Twilio:FromNumber</code></div>
+                        <div class="reference-item" id="setup-ref-sms-webhook-public-base-url"><strong>SMS webhook public base URL</strong><code>OpenClaw:Channels:Sms:Twilio:WebhookPublicBaseUrl</code></div>
+                        <div class="reference-item" id="setup-ref-telegram-bot-token"><strong>Telegram bot token</strong><code>OpenClaw:Channels:Telegram:BotTokenRef = env:TELEGRAM_BOT_TOKEN</code></div>
+                        <div class="reference-item" id="setup-ref-telegram-webhook-secret"><strong>Telegram webhook secret</strong><code>OpenClaw:Channels:Telegram:WebhookSecretTokenRef = env:TELEGRAM_WEBHOOK_SECRET</code></div>
+                        <div class="reference-item" id="setup-ref-whatsapp-cloud-token"><strong>WhatsApp Cloud API token</strong><code>OpenClaw:Channels:WhatsApp:CloudApiTokenRef = env:WHATSAPP_CLOUD_API_TOKEN</code></div>
+                        <div class="reference-item" id="setup-ref-whatsapp-phone-number-id"><strong>WhatsApp phone number ID</strong><code>OpenClaw:Channels:WhatsApp:PhoneNumberId</code></div>
+                        <div class="reference-item" id="setup-ref-whatsapp-app-secret"><strong>WhatsApp webhook app secret</strong><code>OpenClaw:Channels:WhatsApp:WebhookAppSecretRef = env:WHATSAPP_APP_SECRET</code></div>
+                        <div class="reference-item" id="setup-ref-whatsapp-bridge-url"><strong>WhatsApp bridge URL</strong><code>OpenClaw:Channels:WhatsApp:BridgeUrl</code></div>
+                        <div class="reference-item" id="setup-ref-whatsapp-bridge-token"><strong>WhatsApp bridge token</strong><code>OpenClaw:Channels:WhatsApp:BridgeTokenRef = env:WHATSAPP_BRIDGE_TOKEN</code></div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section id="channels-section" class="grid">
+            <div class="card">
+                <h2>Pairing</h2>
+                <pre id="pairing-output">Loading…</pre>
+            </div>
+            <div class="card">
+                <h2>Allowlists</h2>
+                <div id="allowlists-output" class="muted">Loading…</div>
+            </div>
+        </section>
+    </main>
+
+    <script>
+        const tokenInput = document.getElementById('token-input');
+        const rememberToken = document.getElementById('remember-token');
+        const loginButton = document.getElementById('login-button');
+        const logoutButton = document.getElementById('logout-button');
+        const refreshButton = document.getElementById('refresh-button');
+        const flash = document.getElementById('flash');
+        const sessionStatus = document.getElementById('session-status');
+        const summaryOutput = document.getElementById('summary-output');
+        const summaryPills = document.getElementById('summary-pills');
+        const doctorOutput = document.getElementById('doctor-output');
+        const retentionOutput = document.getElementById('retention-output');
+        const approvalsOutput = document.getElementById('approvals-output');
+        const sessionsOutput = document.getElementById('sessions-output');
+        const sessionSearchInput = document.getElementById('session-search-input');
+        const sessionChannelInput = document.getElementById('session-channel-input');
+        const sessionSenderInput = document.getElementById('session-sender-input');
+        const sessionPageSize = document.getElementById('session-page-size');
+        const sessionsPageLabel = document.getElementById('sessions-page-label');
+        const sessionDetailOutput = document.getElementById('session-detail-output');
+        const sessionBranchesOutput = document.getElementById('session-branches-output');
+        const pairingOutput = document.getElementById('pairing-output');
+        const allowlistsOutput = document.getElementById('allowlists-output');
+        const settingsStatus = document.getElementById('settings-status');
+        const settingsPersistence = document.getElementById('settings-persistence');
+        const settingsRestartFields = document.getElementById('settings-restart-fields');
+        const settingsWarnings = document.getElementById('settings-warnings');
+        const settingsReadiness = document.getElementById('settings-readiness');
+        const settingsInputs = {
+            usageFooter: document.getElementById('usage-footer-input'),
+            maxConcurrentSessions: document.getElementById('max-concurrent-sessions-input'),
+            sessionTimeoutMinutes: document.getElementById('session-timeout-input'),
+            sessionTokenBudget: document.getElementById('session-budget-input'),
+            sessionRateLimitPerMinute: document.getElementById('session-rate-limit-input'),
+            allowQueryStringToken: document.getElementById('allow-query-token-input'),
+            browserSessionIdleMinutes: document.getElementById('browser-idle-minutes-input'),
+            browserRememberDays: document.getElementById('browser-remember-days-input'),
+            autonomyMode: document.getElementById('autonomy-mode-input'),
+            requireToolApproval: document.getElementById('require-approval-input'),
+            toolApprovalTimeoutSeconds: document.getElementById('approval-timeout-input'),
+            parallelToolExecution: document.getElementById('parallel-tools-input'),
+            allowShell: document.getElementById('allow-shell-input'),
+            readOnlyMode: document.getElementById('read-only-mode-input'),
+            enableBrowserTool: document.getElementById('enable-browser-tool-input'),
+            allowBrowserEvaluate: document.getElementById('allow-browser-evaluate-input'),
+            maxHistoryTurns: document.getElementById('max-history-turns-input'),
+            enableCompaction: document.getElementById('enable-compaction-input'),
+            compactionThreshold: document.getElementById('compaction-threshold-input'),
+            compactionKeepRecent: document.getElementById('compaction-keep-recent-input'),
+            retentionEnabled: document.getElementById('retention-enabled-input'),
+            retentionRunOnStartup: document.getElementById('retention-run-startup-input'),
+            retentionSweepIntervalMinutes: document.getElementById('retention-interval-input'),
+            retentionSessionTtlDays: document.getElementById('retention-session-ttl-input'),
+            retentionBranchTtlDays: document.getElementById('retention-branch-ttl-input'),
+            retentionArchiveEnabled: document.getElementById('retention-archive-enabled-input'),
+            retentionArchiveRetentionDays: document.getElementById('retention-archive-ttl-input'),
+            retentionMaxItemsPerSweep: document.getElementById('retention-max-items-input'),
+            allowlistSemantics: document.getElementById('allowlist-semantics-input'),
+            smsEnabled: document.getElementById('sms-enabled-input'),
+            smsValidateSignature: document.getElementById('sms-validate-signature-input'),
+            smsDmPolicy: document.getElementById('sms-dm-policy-input'),
+            telegramEnabled: document.getElementById('telegram-enabled-input'),
+            telegramValidateSignature: document.getElementById('telegram-validate-signature-input'),
+            telegramDmPolicy: document.getElementById('telegram-dm-policy-input'),
+            whatsappEnabled: document.getElementById('whatsapp-enabled-input'),
+            whatsappValidateSignature: document.getElementById('whatsapp-validate-signature-input'),
+            whatsappDmPolicy: document.getElementById('whatsapp-dm-policy-input')
+        };
+
+        let csrfToken = null;
+        let sessionsState = {
+            page: 1,
+            pageSize: 25,
+            hasMore: false,
+            search: '',
+            channelId: '',
+            senderId: ''
+        };
+        let settingsState = null;
+        let approvalsPollTimer = null;
+
+        async function api(url, options = {}) {
+            const resp = await fetch(url, {
+                credentials: 'same-origin',
+                ...options,
+                headers: {
+                    ...(options.headers || {})
+                }
+            });
+
+            const contentType = resp.headers.get('content-type') || '';
+            let data = null;
+            if (contentType.includes('application/json')) {
+                data = await resp.json();
+            } else {
+                data = await resp.text();
+            }
+            return { resp, data };
+        }
+
+        async function mutate(url, options = {}) {
+            return api(url, {
+                ...options,
+                headers: {
+                    ...(options.headers || {}),
+                    ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {})
+                }
+            });
+        }
+
+        async function syncAuth() {
+            const { resp, data } = await api('/auth/session');
+            if (!resp.ok) {
+                csrfToken = null;
+                sessionStatus.textContent = 'Login required';
+                return false;
+            }
+
+            csrfToken = data.csrfToken || null;
+            sessionStatus.textContent = data.authMode === 'loopback-open'
+                ? 'Local mode'
+                : (data.authMode === 'browser-session' ? 'Browser session active' : 'Bearer auth ready');
+            return true;
+        }
+
+        async function login() {
+            const token = tokenInput.value.trim();
+            const { resp, data } = await api('/auth/session', {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ remember: rememberToken.checked })
+            });
+
+            if (!resp.ok) {
+                sessionStatus.textContent = `Login failed (${resp.status})`;
+                return false;
+            }
+
+            csrfToken = data.csrfToken || null;
+            tokenInput.value = '';
+            sessionStatus.textContent = rememberToken.checked ? 'Persistent browser session active' : 'Browser session active';
+            return true;
+        }
+
+        async function logout() {
+            await api('/auth/session', { method: 'DELETE' });
+            csrfToken = null;
+            sessionStatus.textContent = 'Logged out';
+        }
+
+        function renderJson(target, value) {
+            target.textContent = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+        }
+
+        function showFlash(message, tone = 'ok') {
+            flash.textContent = message;
+            flash.className = `flash ${tone}`;
+        }
+
+        function clearFlash() {
+            flash.textContent = '';
+            flash.className = 'flash';
+        }
+
+        function toInt(value, fallback = 0) {
+            const parsed = Number.parseInt(value, 10);
+            return Number.isFinite(parsed) ? parsed : fallback;
+        }
+
+        function renderApplyBadges(payload) {
+            const immediate = new Set(payload.immediateFieldKeys || []);
+            const restart = new Set(payload.restartFieldKeys || []);
+            document.querySelectorAll('[data-field-key]').forEach(badge => {
+                const key = badge.getAttribute('data-field-key');
+                if (restart.has(key)) {
+                    badge.textContent = 'Restart';
+                    badge.className = 'apply-badge restart';
+                    return;
+                }
+
+                if (immediate.has(key)) {
+                    badge.textContent = 'Live';
+                    badge.className = 'apply-badge live';
+                    return;
+                }
+
+                badge.textContent = 'Saved';
+                badge.className = 'apply-badge';
+            });
+        }
+
+        function renderChannelReadiness(items) {
+            if (!items || !items.length) {
+                settingsReadiness.innerHTML = '<div class="readiness-card"><strong>No channel readiness data.</strong></div>';
+                return;
+            }
+
+            settingsReadiness.innerHTML = items.map(item => `
+                <div class="readiness-card ${item.status}">
+                    <strong>${item.displayName}</strong>
+                    <div class="muted">Mode: ${item.mode} · Status: ${item.status}</div>
+                    <div class="muted">Enabled: ${item.enabled ? 'yes' : 'no'} · Ready: ${item.ready ? 'yes' : 'no'}</div>
+                    ${(item.missingRequirements || []).length
+                        ? `<ul class="list">${item.missingRequirements.map(value => `<li>Missing: ${value}</li>`).join('')}</ul>`
+                        : ''}
+                    ${(item.warnings || []).length
+                        ? `<ul class="list">${item.warnings.map(value => `<li>${value}</li>`).join('')}</ul>`
+                        : ''}
+                    ${(item.fixGuidance || []).length
+                        ? `<ul class="list">${item.fixGuidance.map(value => `<li><a href="${value.href}">${value.label}</a><div class="muted">${value.reference}</div></li>`).join('')}</ul>`
+                        : ''}
+                </div>
+            `).join('');
+        }
+
+        function applySettingsForm(settings, payload) {
+            settingsState = payload;
+            settingsInputs.usageFooter.value = settings.usageFooter || 'off';
+            settingsInputs.maxConcurrentSessions.value = settings.maxConcurrentSessions;
+            settingsInputs.sessionTimeoutMinutes.value = settings.sessionTimeoutMinutes;
+            settingsInputs.sessionTokenBudget.value = settings.sessionTokenBudget;
+            settingsInputs.sessionRateLimitPerMinute.value = settings.sessionRateLimitPerMinute;
+            settingsInputs.allowQueryStringToken.checked = Boolean(settings.allowQueryStringToken);
+            settingsInputs.browserSessionIdleMinutes.value = settings.browserSessionIdleMinutes;
+            settingsInputs.browserRememberDays.value = settings.browserRememberDays;
+            settingsInputs.autonomyMode.value = settings.autonomyMode || 'supervised';
+            settingsInputs.requireToolApproval.checked = Boolean(settings.requireToolApproval);
+            settingsInputs.toolApprovalTimeoutSeconds.value = settings.toolApprovalTimeoutSeconds;
+            settingsInputs.parallelToolExecution.checked = Boolean(settings.parallelToolExecution);
+            settingsInputs.allowShell.checked = Boolean(settings.allowShell);
+            settingsInputs.readOnlyMode.checked = Boolean(settings.readOnlyMode);
+            settingsInputs.enableBrowserTool.checked = Boolean(settings.enableBrowserTool);
+            settingsInputs.allowBrowserEvaluate.checked = Boolean(settings.allowBrowserEvaluate);
+            settingsInputs.maxHistoryTurns.value = settings.maxHistoryTurns;
+            settingsInputs.enableCompaction.checked = Boolean(settings.enableCompaction);
+            settingsInputs.compactionThreshold.value = settings.compactionThreshold;
+            settingsInputs.compactionKeepRecent.value = settings.compactionKeepRecent;
+            settingsInputs.retentionEnabled.checked = Boolean(settings.retentionEnabled);
+            settingsInputs.retentionRunOnStartup.checked = Boolean(settings.retentionRunOnStartup);
+            settingsInputs.retentionSweepIntervalMinutes.value = settings.retentionSweepIntervalMinutes;
+            settingsInputs.retentionSessionTtlDays.value = settings.retentionSessionTtlDays;
+            settingsInputs.retentionBranchTtlDays.value = settings.retentionBranchTtlDays;
+            settingsInputs.retentionArchiveEnabled.checked = Boolean(settings.retentionArchiveEnabled);
+            settingsInputs.retentionArchiveRetentionDays.value = settings.retentionArchiveRetentionDays;
+            settingsInputs.retentionMaxItemsPerSweep.value = settings.retentionMaxItemsPerSweep;
+            settingsInputs.allowlistSemantics.value = settings.allowlistSemantics || 'legacy';
+            settingsInputs.smsEnabled.checked = Boolean(settings.smsEnabled);
+            settingsInputs.smsValidateSignature.checked = Boolean(settings.smsValidateSignature);
+            settingsInputs.smsDmPolicy.value = settings.smsDmPolicy || 'pairing';
+            settingsInputs.telegramEnabled.checked = Boolean(settings.telegramEnabled);
+            settingsInputs.telegramValidateSignature.checked = Boolean(settings.telegramValidateSignature);
+            settingsInputs.telegramDmPolicy.value = settings.telegramDmPolicy || 'pairing';
+            settingsInputs.whatsappEnabled.checked = Boolean(settings.whatsAppEnabled ?? settings.whatsappEnabled);
+            settingsInputs.whatsappValidateSignature.checked = Boolean(settings.whatsAppValidateSignature ?? settings.whatsappValidateSignature);
+            settingsInputs.whatsappDmPolicy.value = settings.whatsappDmPolicy || 'pairing';
+
+            settingsStatus.textContent = payload.message || 'Settings loaded.';
+            settingsPersistence.textContent = payload.persistence.exists
+                ? `Overrides file: ${payload.persistence.path} · updated ${payload.persistence.lastModifiedAtUtc || 'unknown'}`
+                : `Overrides file: ${payload.persistence.path} · no UI overrides saved`;
+            settingsRestartFields.innerHTML = (payload.restartRequiredFields || []).length
+                ? payload.restartRequiredFields.map(field => `<li>${field}</li>`).join('')
+                : '<li>No restart-only changes pending.</li>';
+            settingsWarnings.innerHTML = (payload.warnings || []).length
+                ? payload.warnings.map(warning => `<li>${warning}</li>`).join('')
+                : '<li>No channel security warnings.</li>';
+            renderApplyBadges(payload);
+            renderChannelReadiness(payload.channelReadiness || []);
+        }
+
+        function collectSettingsForm() {
+            return {
+                usageFooter: settingsInputs.usageFooter.value,
+                maxConcurrentSessions: toInt(settingsInputs.maxConcurrentSessions.value, 64),
+                sessionTimeoutMinutes: toInt(settingsInputs.sessionTimeoutMinutes.value, 30),
+                sessionTokenBudget: toInt(settingsInputs.sessionTokenBudget.value, 0),
+                sessionRateLimitPerMinute: toInt(settingsInputs.sessionRateLimitPerMinute.value, 0),
+                allowQueryStringToken: settingsInputs.allowQueryStringToken.checked,
+                browserSessionIdleMinutes: toInt(settingsInputs.browserSessionIdleMinutes.value, 60),
+                browserRememberDays: toInt(settingsInputs.browserRememberDays.value, 30),
+                autonomyMode: settingsInputs.autonomyMode.value,
+                requireToolApproval: settingsInputs.requireToolApproval.checked,
+                toolApprovalTimeoutSeconds: toInt(settingsInputs.toolApprovalTimeoutSeconds.value, 300),
+                parallelToolExecution: settingsInputs.parallelToolExecution.checked,
+                allowShell: settingsInputs.allowShell.checked,
+                readOnlyMode: settingsInputs.readOnlyMode.checked,
+                enableBrowserTool: settingsInputs.enableBrowserTool.checked,
+                allowBrowserEvaluate: settingsInputs.allowBrowserEvaluate.checked,
+                maxHistoryTurns: toInt(settingsInputs.maxHistoryTurns.value, 50),
+                enableCompaction: settingsInputs.enableCompaction.checked,
+                compactionThreshold: toInt(settingsInputs.compactionThreshold.value, 40),
+                compactionKeepRecent: toInt(settingsInputs.compactionKeepRecent.value, 10),
+                retentionEnabled: settingsInputs.retentionEnabled.checked,
+                retentionRunOnStartup: settingsInputs.retentionRunOnStartup.checked,
+                retentionSweepIntervalMinutes: toInt(settingsInputs.retentionSweepIntervalMinutes.value, 30),
+                retentionSessionTtlDays: toInt(settingsInputs.retentionSessionTtlDays.value, 30),
+                retentionBranchTtlDays: toInt(settingsInputs.retentionBranchTtlDays.value, 14),
+                retentionArchiveEnabled: settingsInputs.retentionArchiveEnabled.checked,
+                retentionArchiveRetentionDays: toInt(settingsInputs.retentionArchiveRetentionDays.value, 30),
+                retentionMaxItemsPerSweep: toInt(settingsInputs.retentionMaxItemsPerSweep.value, 1000),
+                allowlistSemantics: settingsInputs.allowlistSemantics.value,
+                smsEnabled: settingsInputs.smsEnabled.checked,
+                smsValidateSignature: settingsInputs.smsValidateSignature.checked,
+                smsDmPolicy: settingsInputs.smsDmPolicy.value,
+                telegramEnabled: settingsInputs.telegramEnabled.checked,
+                telegramValidateSignature: settingsInputs.telegramValidateSignature.checked,
+                telegramDmPolicy: settingsInputs.telegramDmPolicy.value,
+                whatsappEnabled: settingsInputs.whatsappEnabled.checked,
+                whatsappValidateSignature: settingsInputs.whatsappValidateSignature.checked,
+                whatsappDmPolicy: settingsInputs.whatsappDmPolicy.value
+            };
+        }
+
+        async function loadSummary() {
+            const { resp, data } = await api('/admin/summary');
+            if (!resp.ok) {
+                summaryPills.innerHTML = '';
+                renderJson(summaryOutput, `Summary request failed (${resp.status})`);
+                return;
+            }
+
+            const readiness = data.channels.readiness || [];
+            const readinessIssues = readiness.filter(item => item.status !== 'ready' && item.status !== 'disabled').length;
+            summaryPills.innerHTML = [
+                `Mode: ${data.auth.mode}`,
+                `Active sessions: ${data.runtime.activeSessions}`,
+                `Pending approvals: ${data.runtime.pendingApprovals}`,
+                `Retention: ${data.retention.enabled ? 'on' : 'off'}`,
+                `UI overrides: ${data.settings.overridesActive ? 'active' : 'none'}`,
+                `Allowlists: ${data.channels.allowlistSemantics}`,
+                `Channel issues: ${readinessIssues}`
+            ].map(value => `<span class="pill">${value}</span>`).join('');
+
+            renderJson(summaryOutput, data);
+        }
+
+        async function loadDoctor() {
+            const { resp, data } = await api('/doctor/text');
+            doctorOutput.textContent = resp.ok ? data : `Doctor request failed (${resp.status})`;
+        }
+
+        async function loadRetention() {
+            const { resp, data } = await api('/memory/retention/status');
+            renderJson(retentionOutput, resp.ok ? data : `Retention status failed (${resp.status})`);
+        }
+
+        async function loadApprovals() {
+            const { resp, data } = await api('/tools/approvals');
+            if (!resp.ok) {
+                approvalsOutput.textContent = `Approvals request failed (${resp.status})`;
+                return;
+            }
+
+            if (!data.items.length) {
+                approvalsOutput.textContent = 'No pending approvals.';
+                return;
+            }
+
+            approvalsOutput.innerHTML = data.items.map(item => `
+                <div class="card" style="margin-bottom:0.75rem;">
+                    <strong>${item.toolName}</strong>
+                    <div class="muted">${item.channelId}:${item.senderId}</div>
+                    <div class="muted">${item.sessionId}</div>
+                    <pre>${item.arguments}</pre>
+                    <div class="actions">
+                        <button data-approval="${item.approvalId}" data-approved="true">Approve</button>
+                        <button class="secondary" data-approval="${item.approvalId}" data-approved="false">Deny</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        async function loadSessions() {
+            sessionsState.pageSize = Number(sessionPageSize.value || '25');
+            const params = new URLSearchParams({
+                page: String(sessionsState.page),
+                pageSize: String(sessionsState.pageSize)
+            });
+
+            if (sessionsState.search) params.set('search', sessionsState.search);
+            if (sessionsState.channelId) params.set('channelId', sessionsState.channelId);
+            if (sessionsState.senderId) params.set('senderId', sessionsState.senderId);
+
+            const { resp, data } = await api(`/admin/sessions?${params.toString()}`);
+            if (!resp.ok) {
+                sessionsOutput.textContent = `Sessions request failed (${resp.status})`;
+                return;
+            }
+
+            sessionsState.hasMore = Boolean(data.persisted.hasMore);
+            sessionsPageLabel.textContent = `Page ${data.persisted.page}${data.persisted.hasMore ? ' · more available' : ''}`;
+            document.getElementById('sessions-prev-button').disabled = sessionsState.page <= 1;
+            document.getElementById('sessions-next-button').disabled = !sessionsState.hasMore;
+
+            const activeHtml = data.active.map(item => `
+                <tr>
+                    <td>${item.id}</td>
+                    <td>${item.channelId}</td>
+                    <td>${item.senderId}</td>
+                    <td>${item.lastActiveAt}</td>
+                    <td><button class="secondary" data-session="${item.id}">Inspect</button></td>
+                </tr>
+            `).join('');
+
+            const persistedHtml = data.persisted.items.map(item => `
+                <tr>
+                    <td>${item.id}</td>
+                    <td>${item.channelId}</td>
+                    <td>${item.senderId}</td>
+                    <td>${item.lastActiveAt}</td>
+                    <td>${item.isActive ? 'yes' : 'no'}</td>
+                    <td><button class="secondary" data-session="${item.id}">Inspect</button></td>
+                </tr>
+            `).join('');
+
+            sessionsOutput.innerHTML = `
+                <div class="pill-row">
+                    ${data.filters.search ? `<span class="pill">Search: ${data.filters.search}</span>` : ''}
+                    ${data.filters.channelId ? `<span class="pill">Channel: ${data.filters.channelId}</span>` : ''}
+                    ${data.filters.senderId ? `<span class="pill">Sender: ${data.filters.senderId}</span>` : ''}
+                    <span class="pill">Page size: ${data.persisted.pageSize}</span>
+                </div>
+                <h3>Active (${data.active.length})</h3>
+                <table><thead><tr><th>ID</th><th>Channel</th><th>Sender</th><th>Last Active</th><th></th></tr></thead><tbody>${activeHtml || '<tr><td colspan="5">No active sessions.</td></tr>'}</tbody></table>
+                <h3 style="margin-top:1rem;">Persisted (${data.persisted.returnedCount})</h3>
+                <table><thead><tr><th>ID</th><th>Channel</th><th>Sender</th><th>Last Active</th><th>Active</th><th></th></tr></thead><tbody>${persistedHtml || '<tr><td colspan="6">No persisted sessions.</td></tr>'}</tbody></table>
+            `;
+        }
+
+        async function loadSessionDetail(sessionId) {
+            const detail = await api(`/admin/sessions/${encodeURIComponent(sessionId)}`);
+            renderJson(sessionDetailOutput, detail.resp.ok ? detail.data : `Session detail failed (${detail.resp.status})`);
+
+            const branches = await api(`/admin/sessions/${encodeURIComponent(sessionId)}/branches`);
+            if (!branches.resp.ok) {
+                sessionBranchesOutput.textContent = `Branches request failed (${branches.resp.status})`;
+                return;
+            }
+
+            if (!branches.data.items.length) {
+                sessionBranchesOutput.textContent = 'No branches.';
+                return;
+            }
+
+            sessionBranchesOutput.innerHTML = branches.data.items.map(item => `
+                <div class="card" style="margin-top:0.75rem;">
+                    <strong>${item.name}</strong>
+                    <div class="muted">${item.branchId}</div>
+                    <div class="actions" style="margin-top:0.5rem;">
+                        <button data-restore-branch="${item.branchId}">Restore</button>
+                    </div>
+                </div>
+            `).join('') + `<div class="actions" style="margin-top:0.75rem;"><a href="/admin/sessions/${encodeURIComponent(sessionId)}/export" target="_blank">Export transcript</a></div>`;
+        }
+
+        async function loadPairing() {
+            const { resp, data } = await api('/pairing/list');
+            renderJson(pairingOutput, resp.ok ? data : `Pairing request failed (${resp.status})`);
+        }
+
+        async function loadAllowlists() {
+            const channels = ['sms', 'telegram', 'whatsapp'];
+            const results = await Promise.all(channels.map(channel => api(`/allowlists/${channel}`)));
+            allowlistsOutput.innerHTML = results.map((result, index) => {
+                const channel = channels[index];
+                const content = result.resp.ok ? JSON.stringify(result.data, null, 2) : `Failed (${result.resp.status})`;
+                return `
+                    <div class="card" style="margin-bottom:0.75rem;">
+                        <strong>${channel}</strong>
+                        <div class="actions" style="margin:0.75rem 0;">
+                            <button data-allowlist-action="add_latest" data-channel="${channel}">Add Latest</button>
+                            <button class="secondary" data-allowlist-action="tighten" data-channel="${channel}">Tighten</button>
+                        </div>
+                        <pre>${content}</pre>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        async function loadSettings() {
+            const { resp, data } = await api('/admin/settings');
+            if (!resp.ok) {
+                settingsStatus.textContent = `Settings request failed (${resp.status})`;
+                settingsPersistence.textContent = '';
+                settingsRestartFields.innerHTML = '<li>Settings unavailable.</li>';
+                settingsWarnings.innerHTML = '<li>Settings unavailable.</li>';
+                settingsReadiness.innerHTML = '<div class="readiness-card misconfigured"><strong>Settings unavailable.</strong></div>';
+                return;
+            }
+
+            applySettingsForm(data.settings, data);
+        }
+
+        async function refreshAll() {
+            const authed = await syncAuth();
+            if (!authed) {
+                clearFlash();
+                renderJson(summaryOutput, 'Login required.');
+                doctorOutput.textContent = 'Login required.';
+                retentionOutput.textContent = 'Login required.';
+                approvalsOutput.textContent = 'Login required.';
+                sessionsOutput.textContent = 'Login required.';
+                pairingOutput.textContent = 'Login required.';
+                allowlistsOutput.textContent = 'Login required.';
+                settingsStatus.textContent = 'Login required.';
+                settingsPersistence.textContent = '';
+                settingsRestartFields.innerHTML = '<li>Login required.</li>';
+                settingsWarnings.innerHTML = '<li>Login required.</li>';
+                settingsReadiness.innerHTML = '<div class="readiness-card"><strong>Login required.</strong></div>';
+                if (approvalsPollTimer) {
+                    clearInterval(approvalsPollTimer);
+                    approvalsPollTimer = null;
+                }
+                return;
+            }
+
+            await Promise.all([
+                loadSummary(),
+                loadDoctor(),
+                loadRetention(),
+                loadApprovals(),
+                loadSessions(),
+                loadSettings(),
+                loadPairing(),
+                loadAllowlists()
+            ]);
+
+            if (!approvalsPollTimer) {
+                approvalsPollTimer = setInterval(() => {
+                    loadApprovals();
+                    loadSummary();
+                }, 15000);
+            }
+        }
+
+        loginButton.addEventListener('click', async () => {
+            if (await login()) {
+                showFlash('Browser session established.', 'ok');
+                await refreshAll();
+            }
+        });
+
+        logoutButton.addEventListener('click', async () => {
+            await logout();
+            showFlash('Browser session cleared.', 'warn');
+            if (approvalsPollTimer) {
+                clearInterval(approvalsPollTimer);
+                approvalsPollTimer = null;
+            }
+            await refreshAll();
+        });
+
+        refreshButton.addEventListener('click', refreshAll);
+        document.getElementById('retention-status-button').addEventListener('click', loadRetention);
+        document.getElementById('retention-dry-run-button').addEventListener('click', async () => {
+            const { resp, data } = await mutate('/memory/retention/sweep?dryRun=true', { method: 'POST' });
+            renderJson(retentionOutput, resp.ok ? data : `Retention dry run failed (${resp.status})`);
+            showFlash(resp.ok ? 'Retention dry run completed.' : `Retention dry run failed (${resp.status}).`, resp.ok ? 'ok' : 'error');
+        });
+        document.getElementById('retention-run-button').addEventListener('click', async () => {
+            const { resp, data } = await mutate('/memory/retention/sweep?dryRun=false', { method: 'POST' });
+            renderJson(retentionOutput, resp.ok ? data : `Retention sweep failed (${resp.status})`);
+            showFlash(resp.ok ? 'Retention sweep started.' : `Retention sweep failed (${resp.status}).`, resp.ok ? 'warn' : 'error');
+        });
+        document.getElementById('approvals-refresh-button').addEventListener('click', loadApprovals);
+        document.getElementById('sessions-apply-button').addEventListener('click', async () => {
+            sessionsState.page = 1;
+            sessionsState.search = sessionSearchInput.value.trim();
+            sessionsState.channelId = sessionChannelInput.value.trim();
+            sessionsState.senderId = sessionSenderInput.value.trim();
+            await loadSessions();
+        });
+        document.getElementById('sessions-refresh-button').addEventListener('click', loadSessions);
+        document.getElementById('sessions-prev-button').addEventListener('click', async () => {
+            sessionsState.page = Math.max(1, sessionsState.page - 1);
+            await loadSessions();
+        });
+        document.getElementById('sessions-next-button').addEventListener('click', async () => {
+            if (!sessionsState.hasMore) return;
+            sessionsState.page += 1;
+            await loadSessions();
+        });
+        sessionPageSize.addEventListener('change', async () => {
+            sessionsState.page = 1;
+            await loadSessions();
+        });
+        [sessionSearchInput, sessionChannelInput, sessionSenderInput].forEach(input => {
+            input.addEventListener('keydown', async (event) => {
+                if (event.key !== 'Enter') return;
+                sessionsState.page = 1;
+                sessionsState.search = sessionSearchInput.value.trim();
+                sessionsState.channelId = sessionChannelInput.value.trim();
+                sessionsState.senderId = sessionSenderInput.value.trim();
+                await loadSessions();
+            });
+        });
+
+        approvalsOutput.addEventListener('click', async (event) => {
+            const button = event.target.closest('button[data-approval]');
+            if (!button) return;
+
+            const approvalId = button.getAttribute('data-approval');
+            const approved = button.getAttribute('data-approved') === 'true';
+            const { resp } = await mutate(`/tools/approve?approvalId=${encodeURIComponent(approvalId)}&approved=${approved}`, { method: 'POST' });
+            await loadApprovals();
+            showFlash(resp.ok ? `Approval ${approved ? 'granted' : 'denied'} for ${approvalId}.` : `Approval update failed (${resp.status}).`, resp.ok ? 'ok' : 'error');
+        });
+
+        sessionsOutput.addEventListener('click', async (event) => {
+            const button = event.target.closest('button[data-session]');
+            if (!button) return;
+            await loadSessionDetail(button.getAttribute('data-session'));
+        });
+
+        sessionBranchesOutput.addEventListener('click', async (event) => {
+            const button = event.target.closest('button[data-restore-branch]');
+            if (!button) return;
+
+            const branchId = button.getAttribute('data-restore-branch');
+            const { resp, data } = await mutate(`/admin/branches/${encodeURIComponent(branchId)}/restore`, { method: 'POST' });
+            renderJson(sessionDetailOutput, resp.ok ? data : `Branch restore failed (${resp.status})`);
+            showFlash(resp.ok ? `Branch restored: ${branchId}` : `Branch restore failed (${resp.status}).`, resp.ok ? 'ok' : 'error');
+        });
+
+        allowlistsOutput.addEventListener('click', async (event) => {
+            const button = event.target.closest('button[data-allowlist-action]');
+            if (!button) return;
+
+            const action = button.getAttribute('data-allowlist-action');
+            const channel = button.getAttribute('data-channel');
+            const { resp, data } = await mutate(`/allowlists/${channel}/${action}`, { method: 'POST' });
+            if (!resp.ok) {
+                showFlash(`Allowlist action failed (${resp.status}).`, 'error');
+            }
+            await loadAllowlists();
+            if (resp.ok && data?.senderId) {
+                sessionStatus.textContent = `Allowlist updated for ${channel}: ${data.senderId}`;
+                showFlash(`Allowlist updated for ${channel}: ${data.senderId}`, 'ok');
+            }
+        });
+
+        document.getElementById('settings-reload-button').addEventListener('click', async () => {
+            await loadSettings();
+            showFlash('Settings reloaded from the server.', 'ok');
+        });
+
+        document.getElementById('settings-save-button').addEventListener('click', async () => {
+            const payload = collectSettingsForm();
+            const { resp, data } = await mutate('/admin/settings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            if (!resp.ok) {
+                if (data?.settings) {
+                    applySettingsForm(data.settings, data);
+                }
+                showFlash(data?.errors?.join(' ') || `Settings save failed (${resp.status}).`, 'error');
+                return;
+            }
+
+            applySettingsForm(data.settings, data);
+            showFlash(data.message || 'Settings saved.', data.restartRequired ? 'warn' : 'ok');
+            await loadSummary();
+            await loadDoctor();
+        });
+
+        document.getElementById('settings-reset-button').addEventListener('click', async () => {
+            const { resp, data } = await mutate('/admin/settings', { method: 'DELETE' });
+            if (!resp.ok) {
+                showFlash(`Failed to clear settings overrides (${resp.status}).`, 'error');
+                return;
+            }
+
+            applySettingsForm(data.settings, data);
+            showFlash(data.message || 'Settings overrides cleared.', data.restartRequired ? 'warn' : 'ok');
+            await loadSummary();
+            await loadDoctor();
+        });
+
+        window.addEventListener('beforeunload', () => {
+            if (approvalsPollTimer) {
+                clearInterval(approvalsPollTimer);
+            }
+        });
+
+        refreshAll();
+    </script>
+</body>
+</html>

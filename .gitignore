@@ -31,3 +31,15 @@ appsettings.Local.json
 .playwright/
 .claude/
 
+# IDE launch profiles
+launchSettings.json
+**/Properties/launchSettings.json
+
+# Spreadsheets / data files (never commit)
+*.csv
+*.xlsx
+*.xls
+
+# Draft / scratch docs
+REDDIT_DOTNET_POST.md
+
