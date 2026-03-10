@@ -1,9 +1,16 @@
 using System.Diagnostics;
 using System.Text.Json;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
+using NSubstitute;
 using OpenClaw.Agent.Plugins;
+using OpenClaw.Core.Abstractions;
+using OpenClaw.Core.Models;
+using OpenClaw.Core.Pipeline;
 using OpenClaw.Core.Plugins;
+using OpenClaw.Core.Sessions;
 using OpenClaw.Core.Skills;
+using OpenClaw.Gateway.Extensions;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -465,7 +472,7 @@ public sealed class PluginBridgeIntegrationTests : IDisposable
             "index.js",
             """
             module.exports = function(api) {
-              api.registerChannel({ id: "telegram" });
+              api.registerGatewayMethod("custom", () => {});
               api.registerTool({
                 name: "unsupported_echo",
                 description: "Should never load",
@@ -485,7 +492,7 @@ public sealed class PluginBridgeIntegrationTests : IDisposable
 
         Assert.Empty(tools);
         var report = Assert.Single(host.Reports, r => r.PluginId == "unsupported-plugin" && !r.Loaded);
-        Assert.Contains(report.Diagnostics, d => d.Code == "unsupported_channel_registration");
+        Assert.Contains(report.Diagnostics, d => d.Code == "unsupported_gateway_method");
     }
 
     [Fact]
@@ -555,8 +562,8 @@ public sealed class PluginBridgeIntegrationTests : IDisposable
         Assert.Contains(report.Diagnostics, d => d.Code == "entry_not_found");
     }
 
-    private PluginHost CreateHost(PluginsConfig config)
-        => new(config, GetBridgeScriptPath(), new TestLogger());
+    private PluginHost CreateHost(PluginsConfig config, GatewayRuntimeState? runtimeState = null)
+        => new(config, GetBridgeScriptPath(), new TestLogger(), runtimeState);
 
     private string CreatePlugin(
         string id,
@@ -692,6 +699,778 @@ public sealed class PluginBridgeIntegrationTests : IDisposable
     {
         public required ProcessMemorySnapshot Host { get; init; }
         public required PluginBridgeMemorySnapshot Child { get; init; }
+    }
+
+    [Fact]
+    public async Task LoadAsync_RegisterChannel_LoadsSuccessfully()
+    {
+        if (!HasNode()) return;
+
+        var pluginDir = CreatePlugin(
+            "channel-plugin",
+            "index.js",
+            """
+            module.exports = function(api) {
+              api.registerChannel({
+                id: "test-channel",
+                start: async () => {},
+                send: async (msg) => {},
+                stop: async () => {}
+              });
+              api.registerTool({
+                name: "channel_echo",
+                description: "Channel echo",
+                parameters: { type: "object", properties: {} },
+                execute: async () => "ok"
+              });
+            };
+            """);
+
+        await using var host = CreateHost(new PluginsConfig
+        {
+            Enabled = true,
+            Load = new PluginLoadConfig { Paths = [pluginDir] }
+        });
+
+        var tools = await host.LoadAsync(null, CancellationToken.None);
+
+        Assert.Single(tools);
+        Assert.Single(host.ChannelAdapters);
+        Assert.Equal("test-channel", host.ChannelAdapters[0].ChannelId);
+        var report = Assert.Single(host.Reports, r => r.PluginId == "channel-plugin" && r.Loaded);
+        Assert.Equal(1, report.ChannelCount);
+        Assert.Contains(PluginCapabilityPolicy.Channels, report.RequestedCapabilities);
+    }
+
+    [Fact]
+    public async Task LoadAsync_RegisterCommand_LoadsSuccessfully()
+    {
+        if (!HasNode()) return;
+
+        var pluginDir = CreatePlugin(
+            "command-plugin",
+            "index.js",
+            """
+            module.exports = function(api) {
+              api.registerCommand({
+                name: "greet",
+                description: "Greet user",
+                handler: async (args) => `Hello, ${args || "world"}!`
+              });
+              api.registerTool({
+                name: "command_echo",
+                description: "Command echo",
+                parameters: { type: "object", properties: {} },
+                execute: async () => "ok"
+              });
+            };
+            """);
+
+        await using var host = CreateHost(new PluginsConfig
+        {
+            Enabled = true,
+            Load = new PluginLoadConfig { Paths = [pluginDir] }
+        });
+
+        var tools = await host.LoadAsync(null, CancellationToken.None);
+
+        Assert.Single(tools);
+        var report = Assert.Single(host.Reports, r => r.PluginId == "command-plugin" && r.Loaded);
+        Assert.Equal(1, report.CommandCount);
+        Assert.Contains(PluginCapabilityPolicy.Commands, report.RequestedCapabilities);
+    }
+
+    [Fact]
+    public async Task LoadAsync_RegisterProvider_LoadsSuccessfully()
+    {
+        if (!HasNode()) return;
+
+        var pluginDir = CreatePlugin(
+            "provider-plugin",
+            "index.js",
+            """
+            module.exports = function(api) {
+              api.registerProvider({
+                id: "custom-llm",
+                models: ["custom-1"],
+                complete: async ({ messages }) => ({ text: "hello from custom" })
+              });
+              api.registerTool({
+                name: "provider_echo",
+                description: "Provider echo",
+                parameters: { type: "object", properties: {} },
+                execute: async () => "ok"
+              });
+            };
+            """);
+
+        await using var host = CreateHost(new PluginsConfig
+        {
+            Enabled = true,
+            Load = new PluginLoadConfig { Paths = [pluginDir] }
+        });
+
+        var tools = await host.LoadAsync(null, CancellationToken.None);
+
+        Assert.Single(tools);
+        var report = Assert.Single(host.Reports, r => r.PluginId == "provider-plugin" && r.Loaded);
+        Assert.Equal(1, report.ProviderCount);
+        Assert.Contains(PluginCapabilityPolicy.Providers, report.RequestedCapabilities);
+    }
+
+    [Fact]
+    public async Task LoadAsync_EventHook_LoadsSuccessfully()
+    {
+        if (!HasNode()) return;
+
+        var pluginDir = CreatePlugin(
+            "hook-plugin",
+            "index.js",
+            """
+            module.exports = function(api) {
+              api.on("tool:before", async (ctx) => true);
+              api.on("tool:after", async (ctx) => {});
+              api.registerTool({
+                name: "hook_echo",
+                description: "Hook echo",
+                parameters: { type: "object", properties: {} },
+                execute: async () => "ok"
+              });
+            };
+            """);
+
+        await using var host = CreateHost(new PluginsConfig
+        {
+            Enabled = true,
+            Load = new PluginLoadConfig { Paths = [pluginDir] }
+        });
+
+        var tools = await host.LoadAsync(null, CancellationToken.None);
+
+        Assert.Single(tools);
+        Assert.Single(host.ToolHooks);
+        var report = Assert.Single(host.Reports, r => r.PluginId == "hook-plugin" && r.Loaded);
+        Assert.Equal(2, report.EventSubscriptionCount);
+        Assert.Contains(PluginCapabilityPolicy.Hooks, report.RequestedCapabilities);
+    }
+
+    [Fact]
+    public async Task LoadAsync_AotMode_BlocksJitOnlyBridgeCapabilities()
+    {
+        if (!HasNode()) return;
+
+        var pluginDir = CreatePlugin(
+            "aot-blocked-plugin",
+            "index.js",
+            """
+            module.exports = function(api) {
+              api.registerChannel({ id: "jit-only-channel" });
+              api.registerCommand({
+                name: "jitcmd",
+                description: "jit command",
+                handler: async () => "ok"
+              });
+              api.registerTool({
+                name: "aot_blocked_echo",
+                description: "AOT blocked echo",
+                parameters: { type: "object", properties: {} },
+                execute: async () => "blocked"
+              });
+            };
+            """);
+
+        await using var host = CreateHost(
+            new PluginsConfig
+            {
+                Enabled = true,
+                Load = new PluginLoadConfig { Paths = [pluginDir] }
+            },
+            RuntimeModeResolver.Resolve(new RuntimeConfig { Mode = "aot" }, dynamicCodeSupported: true));
+
+        var tools = await host.LoadAsync(null, CancellationToken.None);
+
+        Assert.Empty(tools);
+        var report = Assert.Single(host.Reports, r => r.PluginId == "aot-blocked-plugin");
+        Assert.False(report.Loaded);
+        Assert.True(report.BlockedByRuntimeMode);
+        Assert.Equal("aot", report.EffectiveRuntimeMode);
+        Assert.Contains(PluginCapabilityPolicy.Channels, report.RequestedCapabilities);
+        Assert.Contains(PluginCapabilityPolicy.Commands, report.RequestedCapabilities);
+        Assert.Contains(report.Diagnostics, d => d.Code == "jit_mode_required");
+    }
+
+    [Fact]
+    public async Task LoadAsync_AotMode_AllowsAotSafeBridgeCapabilities()
+    {
+        if (!HasNode()) return;
+
+        var pluginDir = CreatePlugin(
+            "aot-safe-plugin",
+            "index.js",
+            """
+            module.exports = function(api) {
+              api.registerService({
+                id: "svc",
+                start: async () => {},
+                stop: async () => {}
+              });
+              api.registerTool({
+                name: "aot_safe_echo",
+                description: "AOT safe echo",
+                parameters: { type: "object", properties: { text: { type: "string" } } },
+                execute: async (_pluginId, params) => `safe:${params.text ?? ""}`
+              });
+            };
+            """);
+
+        await using var host = CreateHost(
+            new PluginsConfig
+            {
+                Enabled = true,
+                Load = new PluginLoadConfig { Paths = [pluginDir] }
+            },
+            RuntimeModeResolver.Resolve(new RuntimeConfig { Mode = "aot" }, dynamicCodeSupported: true));
+
+        var tools = await host.LoadAsync(null, CancellationToken.None);
+
+        var tool = Assert.Single(tools);
+        Assert.Equal("safe:hello", await tool.ExecuteAsync("""{"text":"hello"}""", CancellationToken.None));
+        var report = Assert.Single(host.Reports, r => r.PluginId == "aot-safe-plugin" && r.Loaded);
+        Assert.Contains(PluginCapabilityPolicy.Tools, report.RequestedCapabilities);
+        Assert.Contains(PluginCapabilityPolicy.Services, report.RequestedCapabilities);
+        Assert.DoesNotContain(report.RequestedCapabilities, capability => capability == PluginCapabilityPolicy.Channels);
+    }
+
+    [Theory]
+    [InlineData("stdio")]
+    [InlineData("socket")]
+    [InlineData("hybrid")]
+    public async Task BridgeTransportModes_DeliverInboundNotifications_AndExecuteTools(string transportMode)
+    {
+        if (!HasNode()) return;
+
+        var pluginDir = CreatePlugin(
+            $"notify-plugin-{transportMode}",
+            "index.js",
+            """
+            module.exports = function(api) {
+              const channel = {
+                id: "notify-channel",
+                start: async () => {
+                  if (channel.receive) {
+                    setTimeout(() => {
+                      channel.receive({ senderId: "user1", text: "hello from plugin", sessionId: "sess-123" });
+                    }, 25);
+                  }
+                },
+                send: async (msg) => {},
+                stop: async () => {}
+              };
+              api.registerChannel(channel);
+              api.registerTool({
+                name: "notify_echo",
+                description: "Notify echo",
+                parameters: {
+                  type: "object",
+                  properties: {
+                    text: { type: "string" }
+                  }
+                },
+                execute: async (_pluginId, params) => `echo:${params.text ?? "ok"}`
+              });
+            };
+            """);
+
+        await using var host = CreateHost(new PluginsConfig
+        {
+            Enabled = true,
+            Load = new PluginLoadConfig { Paths = [pluginDir] },
+            Transport = new BridgeTransportConfig { Mode = transportMode }
+        });
+
+        var tools = await host.LoadAsync(null, CancellationToken.None);
+        var tool = Assert.Single(tools);
+        var adapter = Assert.Single(host.ChannelAdapters);
+
+        var inboundTcs = new TaskCompletionSource<InboundMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+        adapter.OnMessageReceived += (msg, _) =>
+        {
+            inboundTcs.TrySetResult(msg);
+            return ValueTask.CompletedTask;
+        };
+
+        await adapter.StartAsync(CancellationToken.None);
+        var inbound = await inboundTcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal("notify-channel", inbound.ChannelId);
+        Assert.Equal("user1", inbound.SenderId);
+        Assert.Equal("hello from plugin", inbound.Text);
+        Assert.Equal("sess-123", inbound.SessionId);
+
+        var result = await tool.ExecuteAsync("""{"text":"hello"}""", CancellationToken.None);
+        Assert.Equal("echo:hello", result);
+    }
+
+    [Theory]
+    [InlineData("stdio")]
+    [InlineData("socket")]
+    [InlineData("hybrid")]
+    public async Task BridgeTransportModes_RestartAfterChildExit(string transportMode)
+    {
+        if (!HasNode()) return;
+
+        var pluginDir = CreatePlugin(
+            $"restart-plugin-{transportMode}",
+            "index.js",
+            """
+            module.exports = function(api) {
+              api.registerTool({
+                name: "restart_echo",
+                description: "Restart echo",
+                parameters: {
+                  type: "object",
+                  properties: {
+                    text: { type: "string" },
+                    kill: { type: "boolean" }
+                  }
+                },
+                execute: async (_pluginId, params) => {
+                  if (params.kill) {
+                    setTimeout(() => process.exit(0), 20);
+                    return "restarting";
+                  }
+
+                  return `echo:${params.text ?? "ok"}`;
+                }
+              });
+            };
+            """);
+
+        await using var host = CreateHost(new PluginsConfig
+        {
+            Enabled = true,
+            Load = new PluginLoadConfig { Paths = [pluginDir] },
+            Transport = new BridgeTransportConfig { Mode = transportMode }
+        });
+
+        var tools = await host.LoadAsync(null, CancellationToken.None);
+        var tool = Assert.Single(tools);
+
+        Assert.Equal("echo:first", await tool.ExecuteAsync("""{"text":"first"}""", CancellationToken.None));
+        Assert.Equal("restarting", await tool.ExecuteAsync("""{"kill":true}""", CancellationToken.None));
+        await Task.Delay(500);
+        Assert.Equal("echo:second", await tool.ExecuteAsync("""{"text":"second"}""", CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task RegisterCommand_ExecutesThroughChatCommandProcessor()
+    {
+        if (!HasNode()) return;
+
+        var pluginDir = CreatePlugin(
+            "command-runtime-plugin",
+            "index.js",
+            """
+            module.exports = function(api) {
+              api.registerCommand({
+                name: "greet",
+                description: "Greet user",
+                handler: async (args) => `Hello, ${args || "world"}!`
+              });
+              api.registerTool({
+                name: "command_runtime_echo",
+                description: "Command runtime echo",
+                parameters: { type: "object", properties: {} },
+                execute: async () => "ok"
+              });
+            };
+            """);
+
+        await using var host = CreateHost(new PluginsConfig
+        {
+            Enabled = true,
+            Load = new PluginLoadConfig { Paths = [pluginDir] }
+        });
+
+        _ = await host.LoadAsync(null, CancellationToken.None);
+        var memoryStore = Substitute.For<IMemoryStore>();
+        var sessionManager = new SessionManager(memoryStore, new GatewayConfig());
+        var processor = new ChatCommandProcessor(sessionManager);
+        host.RegisterCommandsWith(processor);
+
+        var session = new Session
+        {
+            Id = "session-1",
+            ChannelId = "test",
+            SenderId = "user"
+        };
+
+        var (handled, response) = await processor.TryProcessCommandAsync(session, "/greet Codex", CancellationToken.None);
+
+        Assert.True(handled);
+        Assert.Equal("Hello, Codex!", response);
+    }
+
+    [Fact]
+    public async Task RegisterProvider_ReceivesSerializedChatOptions()
+    {
+        if (!HasNode()) return;
+
+        var pluginDir = CreatePlugin(
+            "provider-runtime-plugin",
+            "index.js",
+            """
+            module.exports = function(api) {
+              api.registerProvider({
+                id: "custom-llm",
+                models: ["custom-1", "custom-2"],
+                complete: async ({ messages, options }) => ({
+                  text: JSON.stringify({
+                    modelId: options?.modelId ?? null,
+                    temperature: options?.temperature ?? null,
+                    maxOutputTokens: options?.maxOutputTokens ?? null,
+                    responseFormatKind: options?.responseFormat?.kind ?? null,
+                    responseFormatSchemaName: options?.responseFormat?.schemaName ?? null,
+                    toolModeKind: options?.toolMode?.kind ?? null,
+                    toolModeFunctionName: options?.toolMode?.functionName ?? null,
+                    toolCount: options?.tools?.length ?? 0,
+                    firstToolName: options?.tools?.[0]?.name ?? null,
+                    firstToolHasSchema: !!options?.tools?.[0]?.inputSchema,
+                    stopSequences: options?.stopSequences ?? [],
+                    reasoningEffort: options?.reasoning?.effort ?? null,
+                    additionalFoo: options?.additionalProperties?.foo ?? null,
+                    messageCount: messages?.length ?? 0
+                  })
+                })
+              });
+              api.registerTool({
+                name: "provider_runtime_echo",
+                description: "Provider runtime echo",
+                parameters: { type: "object", properties: {} },
+                execute: async () => "ok"
+              });
+            };
+            """);
+
+        await using var host = CreateHost(new PluginsConfig
+        {
+            Enabled = true,
+            Load = new PluginLoadConfig { Paths = [pluginDir] }
+        });
+
+        _ = await host.LoadAsync(null, CancellationToken.None);
+        var registration = Assert.Single(host.ProviderRegistrations);
+        var provider = new BridgedLlmProvider(registration.Bridge, registration.ProviderId, new TestLogger());
+
+        using var toolSchema = JsonDocument.Parse("""{"type":"object","properties":{"x":{"type":"number"}}}""");
+        using var responseSchema = JsonDocument.Parse("""{"type":"object","properties":{"answer":{"type":"string"}}}""");
+
+        var options = new ChatOptions
+        {
+            ModelId = "custom-2",
+            Temperature = 0.25f,
+            MaxOutputTokens = 321,
+            ResponseFormat = ChatResponseFormat.ForJsonSchema(responseSchema.RootElement.Clone(), "provider_response"),
+            ToolMode = ChatToolMode.RequireSpecific("math_tool"),
+            Tools =
+            [
+                AIFunctionFactory.CreateDeclaration(
+                    "math_tool",
+                    "Math tool",
+                    toolSchema.RootElement.Clone(),
+                    returnJsonSchema: responseSchema.RootElement.Clone())
+            ],
+            StopSequences = ["END"],
+            Reasoning = new ReasoningOptions
+            {
+                Effort = ReasoningEffort.High,
+                Output = ReasoningOutput.Summary
+            }
+        };
+        options.AdditionalProperties = new AdditionalPropertiesDictionary { ["foo"] = "bar" };
+
+        var response = await provider.GetResponseAsync(
+            [new ChatMessage(ChatRole.User, "hello")],
+            options,
+            CancellationToken.None);
+
+        var payload = JsonDocument.Parse(response.Text ?? "{}").RootElement;
+        Assert.Equal("custom-2", payload.GetProperty("modelId").GetString());
+        Assert.Equal(0.25, payload.GetProperty("temperature").GetDouble(), 3);
+        Assert.Equal(321, payload.GetProperty("maxOutputTokens").GetInt32());
+        Assert.Equal("json", payload.GetProperty("responseFormatKind").GetString());
+        Assert.Equal("provider_response", payload.GetProperty("responseFormatSchemaName").GetString());
+        Assert.Equal("requireSpecific", payload.GetProperty("toolModeKind").GetString());
+        Assert.Equal("math_tool", payload.GetProperty("toolModeFunctionName").GetString());
+        Assert.Equal(1, payload.GetProperty("toolCount").GetInt32());
+        Assert.Equal("math_tool", payload.GetProperty("firstToolName").GetString());
+        Assert.True(payload.GetProperty("firstToolHasSchema").GetBoolean());
+        Assert.Equal("END", payload.GetProperty("stopSequences")[0].GetString());
+        Assert.Equal("High", payload.GetProperty("reasoningEffort").GetString());
+        Assert.Equal("bar", payload.GetProperty("additionalFoo").GetString());
+        Assert.Equal(1, payload.GetProperty("messageCount").GetInt32());
+    }
+
+    [Fact]
+    public async Task EventHooks_ForwardTypedRuntimePayloads()
+    {
+        if (!HasNode()) return;
+
+        var beforePath = Path.Combine(_tempDir, "hook.before.json");
+        var afterPath = Path.Combine(_tempDir, "hook.after.json");
+        var pluginDir = CreatePlugin(
+            "hook-runtime-plugin",
+            "index.js",
+            $$"""
+            const { writeFileSync } = require("node:fs");
+
+            module.exports = function(api) {
+              api.on("tool:before", async (ctx) => {
+                writeFileSync({{ToJsString(beforePath)}}, JSON.stringify(ctx));
+                return { allow: false };
+              });
+              api.on("tool:after", async (ctx) => {
+                writeFileSync({{ToJsString(afterPath)}}, JSON.stringify({
+                  durationType: typeof ctx.duration,
+                  failedType: typeof ctx.failed,
+                  failed: ctx.failed,
+                  duration: ctx.duration
+                }));
+              });
+              api.registerTool({
+                name: "hook_runtime_echo",
+                description: "Hook runtime echo",
+                parameters: { type: "object", properties: {} },
+                execute: async () => "ok"
+              });
+            };
+            """);
+
+        await using var host = CreateHost(new PluginsConfig
+        {
+            Enabled = true,
+            Load = new PluginLoadConfig { Paths = [pluginDir] }
+        });
+
+        _ = await host.LoadAsync(null, CancellationToken.None);
+        var hook = Assert.Single(host.ToolHooks);
+
+        var allowed = await hook.BeforeExecuteAsync("shell_exec", """{"cmd":"ls"}""", CancellationToken.None);
+        await hook.AfterExecuteAsync("shell_exec", """{"cmd":"ls"}""", "done", TimeSpan.FromMilliseconds(123), failed: true, CancellationToken.None);
+
+        Assert.False(allowed);
+
+        var beforePayload = JsonDocument.Parse(await File.ReadAllTextAsync(beforePath)).RootElement;
+        Assert.Equal("shell_exec", beforePayload.GetProperty("toolName").GetString());
+        Assert.Equal("before", beforePayload.GetProperty("phase").GetString());
+
+        var afterPayload = JsonDocument.Parse(await File.ReadAllTextAsync(afterPath)).RootElement;
+        Assert.Equal("number", afterPayload.GetProperty("durationType").GetString());
+        Assert.Equal("boolean", afterPayload.GetProperty("failedType").GetString());
+        Assert.True(afterPayload.GetProperty("failed").GetBoolean());
+        Assert.InRange(afterPayload.GetProperty("duration").GetDouble(), 100, 200);
+    }
+
+    [Theory]
+    [InlineData("stdio")]
+    [InlineData("socket")]
+    [InlineData("hybrid")]
+    public async Task ChannelShutdown_InvokesStopOnDispose(string transportMode)
+    {
+        if (!HasNode()) return;
+
+        var stopPath = Path.Combine(_tempDir, $"channel-stop-{transportMode}.txt");
+        var pluginDir = CreatePlugin(
+            $"channel-stop-plugin-{transportMode}",
+            "index.js",
+            $$"""
+            const { writeFileSync } = require("node:fs");
+
+            module.exports = function(api) {
+              const channel = {
+                id: "stop-channel",
+                start: async () => {},
+                send: async () => {},
+                stop: async () => writeFileSync({{ToJsString(stopPath)}}, "stopped")
+              };
+              api.registerChannel(channel);
+              api.registerTool({
+                name: "channel_stop_echo",
+                description: "Channel stop echo",
+                parameters: { type: "object", properties: {} },
+                execute: async () => "ok"
+              });
+            };
+            """);
+
+        await using (var host = CreateHost(new PluginsConfig
+        {
+            Enabled = true,
+            Load = new PluginLoadConfig { Paths = [pluginDir] },
+            Transport = new BridgeTransportConfig { Mode = transportMode }
+        }))
+        {
+            _ = await host.LoadAsync(null, CancellationToken.None);
+            var adapter = Assert.Single(host.ChannelAdapters);
+            await adapter.StartAsync(CancellationToken.None);
+        }
+
+        Assert.True(File.Exists(stopPath));
+    }
+
+    [Fact]
+    public async Task LoadAsync_SupportedSurfacesMixedWithUnsupported_OnlyUnsupportedFails()
+    {
+        if (!HasNode()) return;
+
+        // A plugin that uses registerChannel (supported) AND registerGatewayMethod (unsupported)
+        // should still fail because of the unsupported surface
+        var pluginDir = CreatePlugin(
+            "mixed-plugin",
+            "index.js",
+            """
+            module.exports = function(api) {
+              api.registerChannel({ id: "ok-channel" });
+              api.registerGatewayMethod("bad", () => {});
+              api.registerTool({
+                name: "mixed_echo",
+                description: "Mixed",
+                parameters: { type: "object", properties: {} },
+                execute: async () => "bad"
+              });
+            };
+            """);
+
+        await using var host = CreateHost(new PluginsConfig
+        {
+            Enabled = true,
+            Load = new PluginLoadConfig { Paths = [pluginDir] }
+        });
+
+        var tools = await host.LoadAsync(null, CancellationToken.None);
+
+        Assert.Empty(tools);
+        var report = Assert.Single(host.Reports, r => r.PluginId == "mixed-plugin" && !r.Loaded);
+        Assert.Contains(report.Diagnostics, d => d.Code == "unsupported_gateway_method");
+    }
+
+    [Fact]
+    public async Task HybridTransport_AfterSocketSwitch_NotificationsAreNotDuplicated()
+    {
+        if (!HasNode()) return;
+
+        var pluginDir = CreatePlugin(
+            "hybrid-dedup-plugin",
+            "index.js",
+            """
+            module.exports = function(api) {
+              const channel = {
+                id: "dedup-channel",
+                start: async () => {
+                  if (channel.receive) {
+                    setTimeout(() => {
+                      channel.receive({ senderId: "u1", text: "ping", sessionId: "s1" });
+                    }, 50);
+                  }
+                },
+                send: async () => {},
+                stop: async () => {}
+              };
+              api.registerChannel(channel);
+              api.registerTool({
+                name: "hybrid_dedup_echo",
+                description: "Hybrid dedup echo",
+                parameters: { type: "object", properties: {} },
+                execute: async () => "ok"
+              });
+            };
+            """);
+
+        await using var host = CreateHost(new PluginsConfig
+        {
+            Enabled = true,
+            Load = new PluginLoadConfig { Paths = [pluginDir] },
+            Transport = new BridgeTransportConfig { Mode = "hybrid" }
+        });
+
+        var tools = await host.LoadAsync(null, CancellationToken.None);
+        Assert.Single(tools);
+        var adapter = Assert.Single(host.ChannelAdapters);
+
+        var receivedCount = 0;
+        var inboundTcs = new TaskCompletionSource<InboundMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+        adapter.OnMessageReceived += (msg, _) =>
+        {
+            Interlocked.Increment(ref receivedCount);
+            inboundTcs.TrySetResult(msg);
+            return ValueTask.CompletedTask;
+        };
+
+        await adapter.StartAsync(CancellationToken.None);
+        var inbound = await inboundTcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        // Wait a bit to ensure no duplicate arrives
+        await Task.Delay(200);
+
+        Assert.Equal("ping", inbound.Text);
+        Assert.Equal(1, receivedCount);
+    }
+
+    [Fact]
+    public async Task HookTimeout_DefaultsToAllow_WhenPluginExceedsTimeout()
+    {
+        if (!HasNode()) return;
+
+        var pluginDir = CreatePlugin(
+            "slow-hook-plugin",
+            "index.js",
+            """
+            module.exports = function(api) {
+              api.on("tool:before", async (ctx) => {
+                await new Promise(resolve => setTimeout(resolve, 10000));
+                return { allow: false };
+              });
+              api.registerTool({
+                name: "slow_hook_echo",
+                description: "Slow hook echo",
+                parameters: { type: "object", properties: {} },
+                execute: async () => "ok"
+              });
+            };
+            """);
+
+        await using var host = CreateHost(new PluginsConfig
+        {
+            Enabled = true,
+            Load = new PluginLoadConfig { Paths = [pluginDir] }
+        });
+
+        _ = await host.LoadAsync(null, CancellationToken.None);
+        var hook = Assert.Single(host.ToolHooks);
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var allowed = await hook.BeforeExecuteAsync("shell_exec", """{"cmd":"ls"}""", CancellationToken.None);
+        sw.Stop();
+
+        Assert.True(allowed, "Hook should default to allow on timeout");
+        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(8), $"Hook should time out within ~5s, took {sw.Elapsed.TotalSeconds:F1}s");
+    }
+
+    [Fact]
+    public void ProviderOrdering_PluginRegisteredProvider_IsResolvedByFactory()
+    {
+        var providerName = $"test-provider-{Guid.NewGuid():N}";
+        var mockClient = Substitute.For<IChatClient>();
+
+        LlmClientFactory.RegisterProvider(providerName, mockClient);
+
+        var resolved = LlmClientFactory.CreateChatClient(new LlmProviderConfig
+        {
+            Provider = providerName,
+            Model = "test-model"
+        });
+
+        Assert.Same(mockClient, resolved);
     }
 
     private sealed class TestLogger : ILogger

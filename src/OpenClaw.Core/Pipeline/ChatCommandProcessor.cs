@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Threading;
 using System.Threading.Tasks;
 using OpenClaw.Core.Abstractions;
@@ -9,10 +10,20 @@ namespace OpenClaw.Core.Pipeline;
 public sealed class ChatCommandProcessor
 {
     private readonly SessionManager _sessionManager;
+    private readonly ConcurrentDictionary<string, Func<string, CancellationToken, Task<string>>> _dynamicCommands = new(StringComparer.OrdinalIgnoreCase);
 
     public ChatCommandProcessor(SessionManager sessionManager)
     {
         _sessionManager = sessionManager;
+    }
+
+    /// <summary>
+    /// Registers a dynamic command handler (e.g. from a plugin).
+    /// </summary>
+    public void RegisterDynamic(string command, Func<string, CancellationToken, Task<string>> handler)
+    {
+        var key = command.StartsWith('/') ? command : "/" + command;
+        _dynamicCommands[key] = handler;
     }
 
     /// <summary>
@@ -28,6 +39,13 @@ public sealed class ChatCommandProcessor
         var parts = text.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
         var command = parts[0].ToLowerInvariant();
         var args = parts.Length > 1 ? parts[1].Trim() : "";
+
+        // Check dynamic commands first (plugin-registered)
+        if (_dynamicCommands.TryGetValue(command, out var dynamicHandler))
+        {
+            var dynamicResult = await dynamicHandler(args, ct);
+            return (true, dynamicResult);
+        }
 
         switch (command)
         {

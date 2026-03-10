@@ -1,36 +1,48 @@
-using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization.Metadata;
+using Microsoft.Extensions.Logging;
 using OpenClaw.Core.Models;
 using OpenClaw.Core.Plugins;
-using Microsoft.Extensions.Logging;
 
 namespace OpenClaw.Agent.Plugins;
 
 /// <summary>
 /// Manages a Node.js child process that runs the plugin bridge script.
-/// Communicates via newline-delimited JSON-RPC over stdin/stdout.
+/// Process lifecycle and restart logic live here; request/response transport is delegated.
 /// </summary>
 public sealed class PluginBridgeProcess : IAsyncDisposable
 {
     private Process? _process;
-    private readonly ConcurrentDictionary<string, TaskCompletionSource<BridgeResponse>> _pending = new();
-    private int _nextId;
-    private Task? _readLoop;
+    private Task? _exitMonitor;
     private readonly string _bridgeScriptPath;
     private readonly ILogger _logger;
     private readonly SemaphoreSlim _lifecycleGate = new(1, 1);
+    private readonly BridgeTransportConfig _transportConfig;
+    private IBridgeTransport? _transport;
+    private BridgeTransportRuntimeConfig _runtimeTransport = new();
     private string? _entryPath;
     private string? _pluginId;
     private JsonElement? _pluginConfig;
     private volatile bool _disposed;
     private volatile bool _intentionalShutdown;
+    private Action<BridgeNotification>? _notificationHandler;
 
-    public PluginBridgeProcess(string bridgeScriptPath, ILogger logger)
+    /// <summary>
+    /// Sets a handler for unsolicited notifications from the plugin process.
+    /// </summary>
+    public void SetNotificationHandler(Action<BridgeNotification> handler)
+    {
+        _notificationHandler = handler;
+        _transport?.SetNotificationHandler(handler);
+    }
+
+    public PluginBridgeProcess(string bridgeScriptPath, ILogger logger, BridgeTransportConfig? transportConfig = null)
     {
         _bridgeScriptPath = bridgeScriptPath;
         _logger = logger;
+        _transportConfig = transportConfig ?? new BridgeTransportConfig();
     }
 
     /// <summary>
@@ -61,10 +73,6 @@ public sealed class PluginBridgeProcess : IAsyncDisposable
         }
     }
 
-    /// <summary>
-    /// Start the bridge process and initialize the plugin.
-    /// Returns the list of tools the plugin registered.
-    /// </summary>
     public async Task<BridgeInitResult> StartAsync(
         string entryPath,
         string pluginId,
@@ -88,9 +96,6 @@ public sealed class PluginBridgeProcess : IAsyncDisposable
         return init ?? new BridgeInitResult();
     }
 
-    /// <summary>
-    /// Execute a tool via the bridge process.
-    /// </summary>
     public async Task<string> ExecuteToolAsync(string toolName, string argumentsJson, CancellationToken ct)
     {
         await EnsureProcessRunningAsync(ct);
@@ -99,18 +104,17 @@ public sealed class PluginBridgeProcess : IAsyncDisposable
             return "Error: Plugin bridge process is not running.";
 
         using var argDoc = JsonDocument.Parse(argumentsJson);
-        var execParams = new Dictionary<string, object?>
+        var execRequest = new BridgeExecuteRequest
         {
-            ["name"] = toolName,
-            ["params"] = argDoc.RootElement.Clone()
+            Name = toolName,
+            Params = argDoc.RootElement.Clone()
         };
 
-        var response = await SendRequestAsync("execute", execParams, ct);
+        var response = await SendAndWaitAsync("execute", execRequest, CoreJsonContext.Default.BridgeExecuteRequest, ct);
 
         if (response.Error is not null)
             return $"Error: {response.Error.Message}";
 
-        // Extract text from content array
         if (response.Result is { } result && result.TryGetProperty("content", out var contentArray))
         {
             var sb = new StringBuilder();
@@ -129,130 +133,64 @@ public sealed class PluginBridgeProcess : IAsyncDisposable
         return response.Result?.GetRawText() ?? "";
     }
 
+    public Task SendRequestAsync(string method, JsonElement? parameters, CancellationToken ct)
+        => SendAndWaitAsync(method, parameters, ct);
+
+    public async Task SendRequestAsync<T>(string method, T parameters, JsonTypeInfo<T> typeInfo, CancellationToken ct)
+        => await SendAndWaitAsync(method, parameters, typeInfo, ct);
+
+    public async Task<BridgeResponse> SendAndWaitAsync(string method, JsonElement? parameters, CancellationToken ct)
+    {
+        await EnsureProcessRunningAsync(ct);
+
+        if (_transport is null)
+            throw new InvalidOperationException("Plugin bridge transport is not running.");
+
+        return await _transport.SendAndWaitAsync(method, parameters, ct);
+    }
+
+    public async Task<BridgeResponse> SendAndWaitAsync<T>(string method, T parameters, JsonTypeInfo<T> typeInfo, CancellationToken ct)
+        => await SendAndWaitAsync(method, Serialize(parameters, typeInfo), ct);
+
     public async ValueTask DisposeAsync()
     {
         _disposed = true;
         _intentionalShutdown = true;
 
-        if (_process is null || _process.HasExited)
+        var process = _process;
+        if (process is null || process.HasExited)
+        {
+            await DisposeTransportAsync();
             return;
+        }
 
         try
         {
-            // Send shutdown command and wait for acknowledgment
-            var shutdownParams = new Dictionary<string, object?>();
-            await SendRequestAsync("shutdown", shutdownParams, CancellationToken.None)
+            await SendAndWaitAsync("shutdown", (JsonElement?)null, CancellationToken.None)
                 .WaitAsync(TimeSpan.FromSeconds(3));
         }
         catch
         {
-            // Best effort — timeout or process already exited
+            // Best effort — timeout or process already exited.
         }
 
-        // Wait briefly for graceful exit
         try
         {
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-            await _process.WaitForExitAsync(cts.Token);
+            await process.WaitForExitAsync(cts.Token);
         }
         catch
         {
-            // Force kill
-            try { _process.Kill(entireProcessTree: true); } catch { /* best effort */ }
+            try { process.Kill(entireProcessTree: true); } catch { }
         }
 
-        _process.Dispose();
-        _process = null;
-        CancelPendingRequests();
-    }
-
-    private async Task<BridgeResponse> SendRequestAsync(
-        string method,
-        Dictionary<string, object?> parameters,
-        CancellationToken ct)
-    {
-        if (_process?.StandardInput is null)
-            throw new InvalidOperationException("Plugin bridge process is not running.");
-
-        var id = Interlocked.Increment(ref _nextId).ToString();
-        var tcs = new TaskCompletionSource<BridgeResponse>(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        using var reg = ct.Register(() => tcs.TrySetCanceled(ct));
-        _pending[id] = tcs;
-
-        try
-        {
-            // Build params as a JsonElement manually (AOT-safe)
-            var paramsElement = BuildParamsElement(parameters);
-
-            var request = new BridgeRequest
-            {
-                Method = method,
-                Id = id,
-                Params = paramsElement
-            };
-            var requestJson = JsonSerializer.Serialize(request, CoreJsonContext.Default.BridgeRequest);
-
-            await _process.StandardInput.WriteLineAsync(requestJson.AsMemory(), ct);
-            await _process.StandardInput.FlushAsync(ct);
-
-            // Timeout after 60 seconds
-            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            timeoutCts.CancelAfter(TimeSpan.FromSeconds(60));
-
-            return await tcs.Task.WaitAsync(timeoutCts.Token);
-        }
-        finally
-        {
-            _pending.TryRemove(id, out _);
-        }
-    }
-
-    private async Task ReadLoopAsync(Process process)
-    {
-        try
-        {
-            while (!process.HasExited)
-            {
-                var line = await process.StandardOutput.ReadLineAsync();
-                if (line is null)
-                    break;
-
-                try
-                {
-                    var response = JsonSerializer.Deserialize(line, CoreJsonContext.Default.BridgeResponse);
-                    if (response?.Id is not null && _pending.TryRemove(response.Id, out var tcs))
-                    {
-                        tcs.TrySetResult(response);
-                    }
-                }
-                catch (JsonException ex)
-                {
-                    _logger.LogWarning(ex, "Plugin bridge emitted malformed JSON: {Line}", Truncate(line, 200));
-                }
-                catch
-                {
-                    _logger.LogWarning("Plugin bridge emitted unreadable output: {Line}", Truncate(line, 200));
-                }
-            }
-        }
-        catch
-        {
-            // Process exited or stream closed
-        }
-
-        CancelPendingRequests();
-
-        if (_disposed || _intentionalShutdown)
-            return;
-
-        _logger.LogWarning("Plugin bridge process for '{PluginId}' exited unexpectedly. Restarting.", _pluginId ?? "unknown");
-        _ = Task.Run(() => RestartAsync(CancellationToken.None));
+        await DisposeTransportAsync();
+        CleanupProcess();
     }
 
     private async Task EnsureProcessRunningAsync(CancellationToken ct)
     {
-        if (_process is not null && !_process.HasExited)
+        if (_process is not null && !_process.HasExited && _transport is not null)
             return;
 
         await RestartAsync(ct);
@@ -272,7 +210,7 @@ public sealed class PluginBridgeProcess : IAsyncDisposable
             if (_disposed)
                 return;
 
-            if (_process is not null && !_process.HasExited)
+            if (_process is not null && !_process.HasExited && _transport is not null)
                 return;
 
             var delay = TimeSpan.FromSeconds(1);
@@ -281,6 +219,7 @@ public sealed class PluginBridgeProcess : IAsyncDisposable
             {
                 try
                 {
+                    await DisposeTransportAsync();
                     CleanupProcess();
                     _intentionalShutdown = false;
                     await InitializeProcessAsync(ct);
@@ -295,6 +234,7 @@ public sealed class PluginBridgeProcess : IAsyncDisposable
                 {
                     lastError = ex;
                     _logger.LogWarning(ex, "Failed to restart plugin bridge for '{PluginId}' on attempt {Attempt}.", _pluginId, attempt);
+                    await DisposeTransportAsync();
                     CleanupProcess();
                     if (attempt < 3)
                         await Task.Delay(delay, ct);
@@ -312,19 +252,49 @@ public sealed class PluginBridgeProcess : IAsyncDisposable
 
     private async Task<BridgeResponse> InitializeProcessAsync(CancellationToken ct)
     {
-        StartProcess(_entryPath!);
+        var (transport, runtimeTransport) = BridgeTransportFactory.Create(_transportConfig, _pluginId!, _logger);
+        if (_notificationHandler is not null)
+            transport.SetNotificationHandler(_notificationHandler);
 
-        var initParams = new Dictionary<string, object?>
+        await transport.PrepareAsync(ct);
+        var process = StartProcess(_entryPath!, runtimeTransport);
+        await transport.StartAsync(process, ct);
+
+        _process = process;
+        _transport = transport;
+        _runtimeTransport = runtimeTransport;
+        _exitMonitor = Task.Run(() => MonitorProcessAsync(process), CancellationToken.None);
+
+        try
         {
-            ["entryPath"] = _entryPath,
-            ["pluginId"] = _pluginId,
-            ["config"] = _pluginConfig
-        };
+            var initRequest = new BridgeInitRequest
+            {
+                EntryPath = _entryPath!,
+                PluginId = _pluginId!,
+                Config = _pluginConfig,
+                Transport = runtimeTransport
+            };
 
-        return await SendRequestAsync("init", initParams, ct);
+            var response = await transport.SendAndWaitAsync(
+                "init",
+                Serialize(initRequest, CoreJsonContext.Default.BridgeInitRequest),
+                ct);
+
+            if (transport is HybridBridgeTransport hybrid)
+                hybrid.UseSocketTransport();
+
+            return response;
+        }
+        catch
+        {
+            await transport.DisposeAsync();
+            _transport = null;
+            CleanupProcess();
+            throw;
+        }
     }
 
-    private void StartProcess(string entryPath)
+    private Process StartProcess(string entryPath, BridgeTransportRuntimeConfig transport)
     {
         var nodeExe = FindNodeExecutable()
             ?? throw new InvalidOperationException(
@@ -344,19 +314,60 @@ public sealed class PluginBridgeProcess : IAsyncDisposable
         psi.ArgumentList.Add("--experimental-vm-modules");
         psi.ArgumentList.Add(_bridgeScriptPath);
         psi.WorkingDirectory = Path.GetDirectoryName(entryPath) ?? ".";
+        psi.Environment["OPENCLAW_BRIDGE_TRANSPORT_MODE"] = transport.Mode;
+        if (!string.IsNullOrWhiteSpace(transport.SocketPath))
+            psi.Environment["OPENCLAW_BRIDGE_SOCKET_PATH"] = transport.SocketPath;
 
         var process = Process.Start(psi)
             ?? throw new InvalidOperationException("Failed to start Node.js plugin bridge process.");
 
+        process.EnableRaisingEvents = true;
         process.ErrorDataReceived += (_, e) =>
         {
             if (!string.IsNullOrWhiteSpace(e.Data))
                 _logger.LogInformation("[Node] {Output}", e.Data);
         };
         process.BeginErrorReadLine();
+        return process;
+    }
 
-        _process = process;
-        _readLoop = Task.Run(() => ReadLoopAsync(process), CancellationToken.None);
+    private async Task MonitorProcessAsync(Process process)
+    {
+        try
+        {
+            await process.WaitForExitAsync();
+        }
+        catch
+        {
+            return;
+        }
+
+        await DisposeTransportAsync();
+
+        if (_disposed || _intentionalShutdown)
+            return;
+
+        _logger.LogWarning("Plugin bridge process for '{PluginId}' exited unexpectedly. Restarting.", _pluginId ?? "unknown");
+        _ = Task.Run(() => RestartAsync(CancellationToken.None));
+    }
+
+    private async Task DisposeTransportAsync()
+    {
+        if (_transport is null)
+            return;
+
+        try
+        {
+            await _transport.DisposeAsync();
+        }
+        catch
+        {
+            // Best effort during teardown / restart.
+        }
+        finally
+        {
+            _transport = null;
+        }
     }
 
     private void CleanupProcess()
@@ -384,20 +395,11 @@ public sealed class PluginBridgeProcess : IAsyncDisposable
         _process = null;
     }
 
-    private void CancelPendingRequests()
-    {
-        foreach (var kvp in _pending)
-            kvp.Value.TrySetCanceled();
-
-        _pending.Clear();
-    }
-
-    private static string Truncate(string value, int maxChars)
-        => value.Length <= maxChars ? value : value[..maxChars] + "...";
+    private static JsonElement Serialize<T>(T value, JsonTypeInfo<T> typeInfo)
+        => JsonSerializer.SerializeToElement(value, typeInfo);
 
     private static string? FindNodeExecutable()
     {
-        // 1. Check PATH via 'which' or 'where'
         string[] candidates = OperatingSystem.IsWindows()
             ? ["node.exe"]
             : ["node"];
@@ -426,7 +428,6 @@ public sealed class PluginBridgeProcess : IAsyncDisposable
             catch { }
         }
 
-        // 2. Check common installation paths
         string[] commonPaths = OperatingSystem.IsWindows()
             ? [
                 @"C:\Program Files\nodejs\node.exe",
@@ -444,10 +445,9 @@ public sealed class PluginBridgeProcess : IAsyncDisposable
         {
             if (path.Contains('*'))
             {
-                // Simple glob for NVM/n
                 var dir = Path.GetDirectoryName(path);
                 if (dir is null) continue;
-                
+
                 var pattern = Path.GetFileName(path);
                 var parent = Path.GetDirectoryName(dir);
                 var subDirPattern = Path.GetFileName(dir);
@@ -468,45 +468,6 @@ public sealed class PluginBridgeProcess : IAsyncDisposable
         }
 
         return null;
-    }
-
-    /// <summary>
-    /// Builds a JsonElement from a Dictionary, handling string and JsonElement values.
-    /// AOT-safe — no reflection-based serialization.
-    /// </summary>
-    private static JsonElement BuildParamsElement(Dictionary<string, object?> parameters)
-    {
-        using var ms = new System.IO.MemoryStream();
-        using (var writer = new Utf8JsonWriter(ms))
-        {
-            writer.WriteStartObject();
-            foreach (var (key, value) in parameters)
-            {
-                writer.WritePropertyName(key);
-                switch (value)
-                {
-                    case null:
-                        writer.WriteNullValue();
-                        break;
-                    case string s:
-                        writer.WriteStringValue(s);
-                        break;
-                    case JsonElement el:
-                        el.WriteTo(writer);
-                        break;
-                    case bool b:
-                        writer.WriteBooleanValue(b);
-                        break;
-                    default:
-                        writer.WriteStringValue(value.ToString());
-                        break;
-                }
-            }
-            writer.WriteEndObject();
-        }
-        ms.Position = 0;
-        using var doc = JsonDocument.Parse(ms);
-        return doc.RootElement.Clone();
     }
 }
 

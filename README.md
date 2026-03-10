@@ -119,7 +119,7 @@ If you enable `OpenClaw:Security:TrustForwardedHeaders=true`, set `OpenClaw:Secu
 When binding to a non-loopback address, the gateway **refuses to start** unless you explicitly harden (or opt in to) the most dangerous settings:
 - Wildcard tooling roots (`AllowedReadRoots=["*"]`, `AllowedWriteRoots=["*"]`)
 - `OpenClaw:Tooling:AllowShell=true`
-- `OpenClaw:Plugins:Enabled=true` (JS plugin bridge)
+- `OpenClaw:Plugins:Enabled=true` or `OpenClaw:Plugins:DynamicNative:Enabled=true` (third-party plugin execution)
 - WhatsApp official webhooks without signature validation (`ValidateSignature=true` + `WebhookAppSecretRef` required)
 - WhatsApp bridge webhooks without a bridge token (`BridgeTokenRef` / `BridgeToken` required)
 - `raw:` secret refs (to reduce accidental secret commits)
@@ -142,24 +142,20 @@ If `AllowedOrigins` is not configured and the client sends an `Origin` header, t
 
 ## Plugin Ecosystem Compatibility 🔌
 
-OpenClaw.NET supports the upstream [OpenClaw TypeScript/JavaScript plugin format](https://github.com/openclaw/openclaw) for the plugin surfaces that are covered by the bridge and test suite.
+OpenClaw.NET now exposes two explicit runtime lanes:
 
-When you enable `OpenClaw:Plugins:Enabled=true`, the Gateway spawns a Node.js JSON-RPC bridge. The tested support matrix today is:
+- `OpenClaw:Runtime:Mode="aot"` keeps the low-memory, trim-safe lane. Supported plugin capabilities here are `registerTool()`, `registerService()`, plugin-packaged skills, and the supported manifest/config subset.
+- `OpenClaw:Runtime:Mode="jit"` enables the expanded compatibility lane. In this mode the bridge also supports `registerChannel()`, `registerCommand()`, `registerProvider()`, and `api.on(...)`, and the gateway can load JIT-only in-process native dynamic plugins.
 
-- `registerTool()` and tool execution
-- `registerService()` lifecycle (`start` / `stop`)
-- plugin-packaged skills declared in `openclaw.plugin.json` `skills[]`
-- `.js`, `.mjs`, and `.ts` discovery in documented install locations
-- manifest config validation for the supported JSON Schema subset
+Pure ClawHub `SKILL.md` packages are independent of the bridge and remain the most plug-and-play compatibility path.
 
-Unsupported extension-host APIs fail fast with explicit diagnostics instead of silently degrading:
+When you enable `OpenClaw:Plugins:Enabled=true`, the Gateway spawns a Node.js JSON-RPC bridge. When you enable `OpenClaw:Plugins:DynamicNative:Enabled=true`, the gateway also loads JIT-only in-process .NET plugins through the native dynamic host.
 
-- `registerChannel`
-- `registerGatewayMethod`
-- `registerCli`
-- `registerCommand`
-- `registerProvider`
-- `api.on(...)`
+Across both lanes, unsupported surfaces fail fast with explicit diagnostics instead of silently degrading:
+
+- `registerGatewayMethod()`
+- `registerCli()`
+- any JIT-only capability when the effective runtime mode is `aot`
 
 The `/doctor` report includes per-plugin load diagnostics, and the repo now includes hermetic bridge tests plus a pinned public smoke manifest for mainstream packages. For the exact matrix and TypeScript requirements such as `jiti`, see **[Plugin Compatibility Guide](COMPATIBILITY.md)**.
 

@@ -140,4 +140,19 @@ public sealed class ConfigValidatorTests
         var errors = ConfigValidator.Validate(config);
         Assert.Contains(errors, e => e.Contains("greater than MaxHistoryTurns", StringComparison.Ordinal));
     }
+
+    [Fact]
+    public void Validate_InvalidRuntimeMode_ReturnsError()
+    {
+        var config = new GatewayConfig
+        {
+            Runtime = new RuntimeConfig
+            {
+                Mode = "turbo"
+            }
+        };
+
+        var errors = ConfigValidator.Validate(config);
+        Assert.Contains(errors, e => e.Contains("Runtime.Mode", StringComparison.Ordinal));
+    }
 }

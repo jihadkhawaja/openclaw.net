@@ -100,8 +100,14 @@ public sealed class PluginsConfig
     /// <summary>Exclusive slot assignments (e.g. memory → "memory-core").</summary>
     public Dictionary<string, string> Slots { get; set; } = new(StringComparer.Ordinal);
 
+    /// <summary>Transport configuration for the plugin bridge.</summary>
+    public BridgeTransportConfig Transport { get; set; } = new();
+
     /// <summary>Configuration for native plugin replicas.</summary>
     public NativePluginsConfig Native { get; set; } = new();
+
+    /// <summary>Configuration for in-process dynamic .NET plugins. JIT mode only.</summary>
+    public NativeDynamicPluginsConfig DynamicNative { get; set; } = new();
 }
 
 /// <summary>
@@ -492,8 +498,17 @@ public sealed class PluginLoadReport
     public required string PluginId { get; init; }
     public required string SourcePath { get; init; }
     public string? EntryPath { get; init; }
+    public string Origin { get; init; } = "bridge";
     public bool Loaded { get; init; }
+    public string EffectiveRuntimeMode { get; init; } = "jit";
+    public string[] RequestedCapabilities { get; init; } = [];
+    public bool BlockedByRuntimeMode { get; init; }
+    public string? BlockedReason { get; init; }
     public int ToolCount { get; init; }
+    public int ChannelCount { get; init; }
+    public int CommandCount { get; init; }
+    public int EventSubscriptionCount { get; init; }
+    public int ProviderCount { get; init; }
     public string[] SkillDirectories { get; init; } = [];
     public PluginCompatibilityDiagnostic[] Diagnostics { get; init; } = [];
     public string? Error { get; init; }
@@ -549,8 +564,211 @@ public sealed class BridgeError
 public sealed class BridgeInitResult
 {
     public PluginToolRegistration[] Tools { get; init; } = [];
+    public BridgeChannelRegistration[] Channels { get; init; } = [];
+    public BridgeCommandRegistration[] Commands { get; init; } = [];
+    public string[] EventSubscriptions { get; init; } = [];
+    public BridgeProviderRegistration[] Providers { get; init; } = [];
+    public string[] Capabilities { get; init; } = [];
     public PluginCompatibilityDiagnostic[] Diagnostics { get; init; } = [];
     public bool Compatible { get; init; } = true;
+}
+
+public sealed class NativeDynamicPluginsConfig
+{
+    public bool Enabled { get; set; } = false;
+    public string[] Allow { get; set; } = [];
+    public string[] Deny { get; set; } = [];
+    public PluginLoadConfig Load { get; set; } = new();
+    public Dictionary<string, PluginEntryConfig> Entries { get; set; } = new(StringComparer.Ordinal);
+}
+
+public sealed class NativeDynamicPluginManifest
+{
+    public required string Id { get; init; }
+    public string? Name { get; init; }
+    public string? Version { get; init; }
+    public required string AssemblyPath { get; init; }
+    public required string TypeName { get; init; }
+    public string[] Capabilities { get; init; } = [];
+    public string[] Skills { get; init; } = [];
+    public bool JitOnly { get; init; } = true;
+}
+
+public sealed class DiscoveredNativeDynamicPlugin
+{
+    public required NativeDynamicPluginManifest Manifest { get; init; }
+    public required string RootPath { get; init; }
+    public required string ManifestPath { get; init; }
+    public required string AssemblyPath { get; init; }
+}
+
+/// <summary>
+/// Notification from a plugin bridge process (plugin → gateway).
+/// </summary>
+public sealed class BridgeNotification
+{
+    public required string Notification { get; init; }
+    public JsonElement? Params { get; init; }
+}
+
+/// <summary>
+/// Transport configuration for the plugin bridge.
+/// </summary>
+public sealed class BridgeTransportConfig
+{
+    /// <summary>"stdio" (default), "socket", or "hybrid".</summary>
+    public string Mode { get; set; } = "stdio";
+
+    /// <summary>Socket path for socket transport. Auto-generated per plugin if empty.</summary>
+    public string? SocketPath { get; set; }
+}
+
+/// <summary>
+/// Runtime transport details sent to the bridge process during initialization.
+/// </summary>
+public sealed class BridgeTransportRuntimeConfig
+{
+    public string Mode { get; init; } = "stdio";
+    public string? SocketPath { get; init; }
+}
+
+/// <summary>
+/// Channel registration from a plugin bridge.
+/// </summary>
+public sealed class BridgeChannelRegistration
+{
+    public required string Id { get; init; }
+}
+
+/// <summary>
+/// Command registration from a plugin bridge.
+/// </summary>
+public sealed class BridgeCommandRegistration
+{
+    public required string Name { get; init; }
+    public string Description { get; init; } = "";
+}
+
+/// <summary>
+/// Provider registration from a plugin bridge.
+/// </summary>
+public sealed class BridgeProviderRegistration
+{
+    public required string Id { get; init; }
+    public string[] Models { get; init; } = [];
+}
+
+/// <summary>
+/// Provider completion request sent from the gateway to a plugin bridge.
+/// </summary>
+public sealed class BridgeProviderRequest
+{
+    public required string ProviderId { get; init; }
+    public required JsonElement Messages { get; init; }
+    public BridgeProviderOptions? Options { get; init; }
+}
+
+/// <summary>
+/// Serializable subset of <c>ChatOptions</c> forwarded to plugin providers.
+/// </summary>
+public sealed class BridgeProviderOptions
+{
+    public string? ConversationId { get; init; }
+    public string? Instructions { get; init; }
+    public float? Temperature { get; init; }
+    public int? MaxOutputTokens { get; init; }
+    public float? TopP { get; init; }
+    public int? TopK { get; init; }
+    public float? FrequencyPenalty { get; init; }
+    public float? PresencePenalty { get; init; }
+    public long? Seed { get; init; }
+    public BridgeReasoningOptions? Reasoning { get; init; }
+    public BridgeResponseFormat? ResponseFormat { get; init; }
+    public string? ModelId { get; init; }
+    public string[] StopSequences { get; init; } = [];
+    public bool? AllowMultipleToolCalls { get; init; }
+    public BridgeToolMode? ToolMode { get; init; }
+    public BridgeToolDescriptor[] Tools { get; init; } = [];
+    public bool? AllowBackgroundResponses { get; init; }
+    public string? ContinuationToken { get; init; }
+    public Dictionary<string, JsonElement> AdditionalProperties { get; init; } = new(StringComparer.Ordinal);
+}
+
+public sealed class BridgeReasoningOptions
+{
+    public string? Effort { get; init; }
+    public string? Output { get; init; }
+}
+
+public sealed class BridgeResponseFormat
+{
+    public required string Kind { get; init; }
+    public JsonElement? Schema { get; init; }
+    public string? SchemaName { get; init; }
+    public string? SchemaDescription { get; init; }
+}
+
+public sealed class BridgeToolMode
+{
+    public required string Kind { get; init; }
+    public string? FunctionName { get; init; }
+}
+
+public sealed class BridgeToolDescriptor
+{
+    public required string Name { get; init; }
+    public string Description { get; init; } = "";
+    public JsonElement? InputSchema { get; init; }
+    public JsonElement? ReturnSchema { get; init; }
+}
+
+public sealed class BridgeInitRequest
+{
+    public required string EntryPath { get; init; }
+    public required string PluginId { get; init; }
+    public JsonElement? Config { get; init; }
+    public BridgeTransportRuntimeConfig Transport { get; init; } = new();
+}
+
+public sealed class BridgeExecuteRequest
+{
+    public required string Name { get; init; }
+    public JsonElement? Params { get; init; }
+}
+
+public sealed class BridgeChannelControlRequest
+{
+    public required string ChannelId { get; init; }
+}
+
+public sealed class BridgeChannelSendRequest
+{
+    public required string ChannelId { get; init; }
+    public required string RecipientId { get; init; }
+    public required string Text { get; init; }
+}
+
+public sealed class BridgeCommandExecuteRequest
+{
+    public required string Name { get; init; }
+    public string Args { get; init; } = "";
+}
+
+public sealed class BridgeHookBeforeRequest
+{
+    public required string EventName { get; init; }
+    public required string ToolName { get; init; }
+    public required string Arguments { get; init; }
+}
+
+public sealed class BridgeHookAfterRequest
+{
+    public required string EventName { get; init; }
+    public required string ToolName { get; init; }
+    public required string Arguments { get; init; }
+    public required string Result { get; init; }
+    public double DurationMs { get; init; }
+    public bool Failed { get; init; }
 }
 
 /// <summary>

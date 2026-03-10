@@ -1,40 +1,129 @@
 /**
  * OpenClaw.NET Plugin Bridge
  *
- * This script is spawned as a child process by the .NET gateway.
- * It loads an OpenClaw TypeScript/JavaScript plugin using jiti,
- * captures tool registrations, and exposes them via stdin/stdout JSON-RPC.
- *
- * Protocol: newline-delimited JSON on stdin/stdout.
- * Methods:
- *   - init({ entryPath, pluginId, config })  → { tools: PluginToolRegistration[] }
- *   - execute({ name, params })              → { content: ToolContentItem[] }
- *   - shutdown()                             → { ok: true }
+ * The bridge supports three transport modes:
+ * - stdio: requests/responses/notifications over stdin/stdout
+ * - socket: requests/responses/notifications over local IPC socket or named pipe
+ * - hybrid: init over stdio, then runtime traffic over the socket transport
  */
 
 import { createRequire } from "node:module";
 import { createInterface } from "node:readline";
 import { pathToFileURL } from "node:url";
 import { existsSync } from "node:fs";
+import { createConnection } from "node:net";
 import { join, dirname } from "node:path";
 
-// ── Redirect console to protect JSON-RPC on stdout ───────────────────
 console.log = console.error;
 console.info = console.error;
 
-/** @type {Map<string, { execute: Function, optional?: boolean }>} */
+/** @type {Map<string, { execute: Function, optional?: boolean, name: string, description: string, parameters: object }>} */
 const registeredTools = new Map();
 
-/** @type {Map<string, Function>} */
+/** @type {Map<string, any>} */
 const registeredServices = new Map();
+
+/** @type {Map<string, { id: string, send?: Function, start?: Function, stop?: Function }>} */
+const registeredChannels = new Map();
+
+/** @type {Map<string, { name: string, description: string, handler: Function }>} */
+const registeredCommands = new Map();
+
+/** @type {Map<string, Function[]>} */
+const registeredEventHandlers = new Map();
+
+/** @type {Map<string, { id: string, models: string[], complete?: Function }>} */
+const registeredProviders = new Map();
 
 /** @type {Array<{severity: string, code: string, message: string, surface?: string, path?: string}>} */
 let compatibilityDiagnostics = [];
 
+/** @type {Set<string>} */
+const startedChannels = new Set();
+
+/** @type {"stdio" | "socket" | "hybrid"} */
+let transportMode = normalizeMode(process.env.OPENCLAW_BRIDGE_TRANSPORT_MODE ?? "stdio");
+
+/** @type {string | null} */
+let socketPath = process.env.OPENCLAW_BRIDGE_SOCKET_PATH ?? null;
+
+/** @type {import("node:net").Socket | null} */
+let transportSocket = null;
+
+/** @type {boolean} */
+let shuttingDown = false;
+
+/** @type {Promise<void>} */
+let socketReadyPromise = Promise.resolve();
+
+/** @type {(value?: void | PromiseLike<void>) => void} */
+let resolveSocketReady = () => {};
+
+/** @type {(reason?: any) => void} */
+let rejectSocketReady = () => {};
+
+if (transportMode === "socket" || transportMode === "hybrid") {
+  socketReadyPromise = new Promise((resolve, reject) => {
+    resolveSocketReady = resolve;
+    rejectSocketReady = reject;
+  });
+  connectSocketTransport();
+}
+
+function normalizeMode(mode) {
+  const normalized = String(mode ?? "stdio").trim().toLowerCase();
+  if (normalized === "stdio" || normalized === "socket" || normalized === "hybrid") {
+    return normalized;
+  }
+
+  return "stdio";
+}
+
+function connectSocketTransport() {
+  if (!socketPath) {
+    rejectSocketReady(new Error("Socket transport selected without OPENCLAW_BRIDGE_SOCKET_PATH."));
+    return;
+  }
+
+  transportSocket = createConnection(socketPath);
+  transportSocket.setEncoding("utf8");
+
+  transportSocket.once("connect", () => {
+    resolveSocketReady();
+    attachSocketReader(transportSocket);
+  });
+
+  transportSocket.once("error", (error) => {
+    console.error(`[plugin:${pluginId}] ERROR socket transport failed:`, error?.message ?? error);
+    rejectSocketReady(error);
+    if (!shuttingDown) {
+      setTimeout(() => process.exit(1), 50);
+    }
+  });
+
+  transportSocket.on("close", () => {
+    if (!shuttingDown && transportMode !== "stdio") {
+      setTimeout(() => process.exit(1), 50);
+    }
+  });
+}
+
+function attachSocketReader(socket) {
+  const rl = createInterface({ input: socket, terminal: false });
+  rl.on("line", (line) => {
+    handleInboundLine(line, "socket");
+  });
+}
+
 function resetState() {
   registeredTools.clear();
   registeredServices.clear();
+  registeredChannels.clear();
+  registeredCommands.clear();
+  registeredEventHandlers.clear();
+  registeredProviders.clear();
   compatibilityDiagnostics = [];
+  startedChannels.clear();
 }
 
 function addDiagnostic(code, message, surface, path) {
@@ -47,9 +136,66 @@ function addDiagnostic(code, message, surface, path) {
   });
 }
 
-/**
- * Build the plugin API object that gets passed to the plugin's register function.
- */
+function defaultNotificationChannel() {
+  if ((transportMode === "socket" || transportMode === "hybrid") && transportSocket && !transportSocket.destroyed) {
+    return "socket";
+  }
+
+  return "stdio";
+}
+
+function writeMessage(channel, payload) {
+  const line = JSON.stringify(payload) + "\n";
+
+  if (channel === "socket") {
+    if (!transportSocket || transportSocket.destroyed) {
+      throw new Error("Socket transport is not connected.");
+    }
+
+    transportSocket.write(line);
+    return;
+  }
+
+  process.stdout.write(line);
+}
+
+function sendNotification(notificationType, params) {
+  writeMessage(defaultNotificationChannel(), { notification: notificationType, params });
+}
+
+function sendResponse(id, result, error, channel) {
+  const resp = { id };
+  if (error) {
+    resp.error = { code: -1, message: String(error?.message ?? error) };
+  } else {
+    resp.result = result;
+  }
+
+  writeMessage(channel, resp);
+}
+
+function collectCapabilities() {
+  const capabilities = [];
+
+  if (registeredTools.size > 0) capabilities.push("tools");
+  if (registeredServices.size > 0) capabilities.push("services");
+  if (registeredChannels.size > 0) capabilities.push("channels");
+  if (registeredCommands.size > 0) capabilities.push("commands");
+  if (registeredProviders.size > 0) capabilities.push("providers");
+  if (registeredEventHandlers.size > 0) capabilities.push("hooks");
+
+  return capabilities;
+}
+
+function getParam(params, name) {
+  if (!params || typeof params !== "object") {
+    return undefined;
+  }
+
+  const pascal = name.charAt(0).toUpperCase() + name.slice(1);
+  return params[name] ?? params[pascal];
+}
+
 function createPluginApi(pluginId, pluginConfig, logger) {
   return {
     pluginId,
@@ -57,7 +203,6 @@ function createPluginApi(pluginId, pluginConfig, logger) {
     pluginConfig: pluginConfig ?? {},
     logger,
     runtime: {
-      // Stub — .NET gateway handles TTS natively if needed
       tts: {
         textToSpeechTelephony: async () => ({
           audio: Buffer.alloc(0),
@@ -73,11 +218,8 @@ function createPluginApi(pluginId, pluginConfig, logger) {
         return;
       }
 
-      // Normalize parameters to plain JSON Schema
       let parameters = def.parameters;
       if (parameters && typeof parameters === "object") {
-        // If it looks like a TypeBox or standard JSON schema object without a top-level type,
-        // we just ensure it's a cloneable object.
         parameters = JSON.parse(JSON.stringify(parameters));
       }
 
@@ -92,10 +234,18 @@ function createPluginApi(pluginId, pluginConfig, logger) {
 
     registerChannel(channelDef) {
       const id = channelDef?.id ?? "unknown";
-      const message =
-        `Plugin "${pluginId}" registered channel "${id}", but bridged channels are not supported by OpenClaw.NET.`;
-      logger.error(message);
-      addDiagnostic("unsupported_channel_registration", message, "registerChannel", id);
+      registeredChannels.set(id, {
+        id,
+        send: channelDef.send ?? channelDef.onMessage,
+        start: channelDef.start,
+        stop: channelDef.stop,
+      });
+      if (channelDef) {
+        channelDef.receive = (msg) => {
+          sendNotification("channel_message", { channelId: id, ...msg });
+        };
+      }
+      logger.info(`Channel "${id}" registered`);
     },
 
     registerGatewayMethod(name, _handler) {
@@ -105,7 +255,7 @@ function createPluginApi(pluginId, pluginConfig, logger) {
       addDiagnostic("unsupported_gateway_method", message, "registerGatewayMethod", name);
     },
 
-    registerCli(factory, opts) {
+    registerCli(_factory, _opts) {
       const message =
         `Plugin "${pluginId}" tried to register a CLI command, but CLI extensions are not supported by OpenClaw.NET.`;
       logger.error(message);
@@ -113,11 +263,13 @@ function createPluginApi(pluginId, pluginConfig, logger) {
     },
 
     registerCommand(def) {
-      const id = def?.name ?? def?.id ?? "unknown";
-      const message =
-        `Plugin "${pluginId}" tried to register command "${id}", but auto-reply commands are not supported by OpenClaw.NET.`;
-      logger.error(message);
-      addDiagnostic("unsupported_command_registration", message, "registerCommand", id);
+      const name = def?.name ?? def?.id ?? "unknown";
+      registeredCommands.set(name, {
+        name,
+        description: def?.description ?? "",
+        handler: def?.handler ?? def?.execute,
+      });
+      logger.info(`Command "${name}" registered`);
     },
 
     registerService(def) {
@@ -128,17 +280,20 @@ function createPluginApi(pluginId, pluginConfig, logger) {
 
     registerProvider(def) {
       const id = def?.id ?? "unknown";
-      const message =
-        `Plugin "${pluginId}" tried to register model provider "${id}", but model providers are not supported by OpenClaw.NET.`;
-      logger.error(message);
-      addDiagnostic("unsupported_provider_registration", message, "registerProvider", id);
+      registeredProviders.set(id, {
+        id,
+        models: def?.models ?? [],
+        complete: def?.complete ?? def?.execute,
+      });
+      logger.info(`Provider "${id}" registered`);
     },
 
-    on(eventName, _handler) {
-      const message =
-        `Plugin "${pluginId}" tried to register event hook "${eventName}", but bridge event hooks are not supported by OpenClaw.NET.`;
-      logger.error(message);
-      addDiagnostic("unsupported_event_hook", message, "on", eventName);
+    on(eventName, handler) {
+      if (!registeredEventHandlers.has(eventName)) {
+        registeredEventHandlers.set(eventName, []);
+      }
+      registeredEventHandlers.get(eventName).push(handler);
+      logger.info(`Event hook "${eventName}" registered`);
     },
   };
 }
@@ -153,10 +308,6 @@ function createLogger(pluginId) {
   };
 }
 
-/**
- * Load a plugin entry file using dynamic import (supports .ts via jiti if available,
- * or plain .js/.mjs).
- */
 async function loadPlugin(entryPath) {
   const ext = entryPath.split(".").pop()?.toLowerCase();
 
@@ -189,15 +340,12 @@ async function loadPlugin(entryPath) {
     }
   }
 
-  // Standard ESM import
   const url = pathToFileURL(entryPath).href;
   const mod = await import(url);
   return mod.default ?? mod;
 }
 
 function findJiti(entryPath) {
-  // Look for jiti in the plugin's local node_modules, then walk up through
-  // shared node_modules layouts created by npm/yarn/pnpm workspaces.
   const dir = dirname(entryPath);
   let current = dir;
   for (let i = 0; i < 10; i++) {
@@ -224,16 +372,19 @@ function findJiti(entryPath) {
   return null;
 }
 
-// ── JSON-RPC handler ─────────────────────────────────────────────────
-
 let pluginId = "unknown";
 let logger = createLogger(pluginId);
 
 async function handleRequest(req) {
   switch (req.method) {
     case "init": {
-      const { entryPath, pluginId: pid, config } = req.params ?? {};
+      const entryPath = getParam(req.params, "entryPath");
+      const pid = getParam(req.params, "pluginId");
+      const config = getParam(req.params, "config");
+      const transport = getParam(req.params, "transport");
       pluginId = pid ?? "unknown";
+      transportMode = normalizeMode(getParam(transport, "mode") ?? transportMode);
+      socketPath = getParam(transport, "socketPath") ?? socketPath;
       logger = createLogger(pluginId);
       resetState();
 
@@ -254,12 +405,16 @@ async function handleRequest(req) {
         if (compatibilityDiagnostics.length > 0) {
           return {
             tools: [],
+            channels: [],
+            commands: [],
+            eventSubscriptions: [],
+            providers: [],
+            capabilities: collectCapabilities(),
             compatible: false,
             diagnostics: compatibilityDiagnostics,
           };
         }
 
-        // Start any registered services
         for (const [id, svc] of registeredServices) {
           try {
             if (typeof svc.start === "function") await svc.start();
@@ -278,8 +433,30 @@ async function handleRequest(req) {
           });
         }
 
+        const channels = [];
+        for (const [, ch] of registeredChannels) {
+          channels.push({ id: ch.id });
+        }
+
+        const commands = [];
+        for (const [, cmd] of registeredCommands) {
+          commands.push({ name: cmd.name, description: cmd.description });
+        }
+
+        const eventSubscriptions = [...registeredEventHandlers.keys()];
+
+        const providers = [];
+        for (const [, prov] of registeredProviders) {
+          providers.push({ id: prov.id, models: prov.models });
+        }
+
         return {
           tools,
+          channels,
+          commands,
+          eventSubscriptions,
+          providers,
+          capabilities: collectCapabilities(),
           compatible: true,
           diagnostics: compatibilityDiagnostics,
         };
@@ -289,7 +466,8 @@ async function handleRequest(req) {
     }
 
     case "execute": {
-      const { name, params } = req.params ?? {};
+      const name = getParam(req.params, "name");
+      const params = getParam(req.params, "params");
       const tool = registeredTools.get(name);
       if (!tool) {
         throw new Error(`Unknown tool: ${name}`);
@@ -298,7 +476,6 @@ async function handleRequest(req) {
       try {
         const result = await tool.execute(pluginId, params ?? {});
 
-        // Normalize result to content array
         if (result && Array.isArray(result.content)) {
           return result;
         }
@@ -319,8 +496,104 @@ async function handleRequest(req) {
       }
     }
 
+    case "channel_start": {
+      const channelId = getParam(req.params, "channelId");
+      const ch = registeredChannels.get(channelId);
+      if (!ch) throw new Error(`Unknown channel: ${channelId}`);
+      if (typeof ch.start === "function") {
+        await ch.start();
+      }
+      startedChannels.add(channelId);
+      return { ok: true };
+    }
+
+    case "channel_send": {
+      const channelId = getParam(req.params, "channelId");
+      const recipientId = getParam(req.params, "recipientId");
+      const text = getParam(req.params, "text");
+      const ch = registeredChannels.get(channelId);
+      if (!ch) throw new Error(`Unknown channel: ${channelId}`);
+      if (typeof ch.send === "function") {
+        await ch.send({ channelId, recipientId, text });
+      }
+      return { ok: true };
+    }
+
+    case "channel_stop": {
+      const channelId = getParam(req.params, "channelId");
+      await stopChannel(channelId);
+      return { ok: true };
+    }
+
+    case "command_execute": {
+      const name = getParam(req.params, "name");
+      const args = getParam(req.params, "args");
+      const cmd = registeredCommands.get(name);
+      if (!cmd) throw new Error(`Unknown command: ${name}`);
+      if (typeof cmd.handler === "function") {
+        const result = await cmd.handler(args ?? "");
+        return { result: typeof result === "string" ? result : JSON.stringify(result ?? null) };
+      }
+      return { result: "" };
+    }
+
+    case "hook_before": {
+      const eventName = getParam(req.params, "eventName");
+      const toolName = getParam(req.params, "toolName");
+      const toolArgs = getParam(req.params, "arguments");
+      const handlers = registeredEventHandlers.get(eventName) ?? [];
+      let allow = true;
+      for (const handler of handlers) {
+        try {
+          const result = await handler({ toolName, arguments: toolArgs, phase: "before" });
+          if (result === false || (result && result.allow === false)) {
+            allow = false;
+            break;
+          }
+        } catch (e) {
+          logger.error(`Event hook "${eventName}" threw:`, e?.message);
+        }
+      }
+      return { allow };
+    }
+
+    case "hook_after": {
+      const eventName = getParam(req.params, "eventName");
+      const toolName = getParam(req.params, "toolName");
+      const toolArgs = getParam(req.params, "arguments");
+      const result = getParam(req.params, "result");
+      const durationMs = getParam(req.params, "durationMs");
+      const failed = getParam(req.params, "failed");
+      const handlers = registeredEventHandlers.get(eventName) ?? [];
+      for (const handler of handlers) {
+        try {
+          await handler({ toolName, arguments: toolArgs, result, duration: durationMs, failed, phase: "after" });
+        } catch (e) {
+          logger.error(`Event hook "${eventName}" threw:`, e?.message);
+        }
+      }
+      return { ok: true };
+    }
+
+    case "provider_complete": {
+      const providerId = getParam(req.params, "providerId");
+      const messages = getParam(req.params, "messages");
+      const options = getParam(req.params, "options");
+      const prov = registeredProviders.get(providerId);
+      if (!prov) throw new Error(`Unknown provider: ${providerId}`);
+      if (typeof prov.complete === "function") {
+        return await prov.complete({ messages, options });
+      }
+      throw new Error(`Provider "${providerId}" has no complete handler`);
+    }
+
     case "shutdown": {
-      // Stop services
+      shuttingDown = true;
+
+      for (const channelId of [...startedChannels]) {
+        await stopChannel(channelId);
+      }
+
       for (const [id, svc] of registeredServices) {
         try {
           if (typeof svc.stop === "function") await svc.stop();
@@ -328,7 +601,7 @@ async function handleRequest(req) {
           logger.error(`Service "${id}" failed to stop:`, e?.message);
         }
       }
-      // Allow the process to exit after responding
+
       setTimeout(() => process.exit(0), 100);
       return { ok: true };
     }
@@ -338,39 +611,61 @@ async function handleRequest(req) {
   }
 }
 
-function sendResponse(id, result, error) {
-  const resp = { id };
-  if (error) {
-    resp.error = { code: -1, message: String(error?.message ?? error) };
-  } else {
-    resp.result = result;
+async function stopChannel(channelId) {
+  if (!startedChannels.has(channelId)) {
+    return;
   }
-  process.stdout.write(JSON.stringify(resp) + "\n");
+
+  startedChannels.delete(channelId);
+  const ch = registeredChannels.get(channelId);
+  if (!ch) {
+    return;
+  }
+
+  try {
+    if (typeof ch.stop === "function") {
+      await ch.stop();
+    }
+  } catch (e) {
+    logger.error(`Channel "${channelId}" failed to stop:`, e?.message);
+  }
 }
 
-// ── Main loop ────────────────────────────────────────────────────────
-
-const rl = createInterface({ input: process.stdin, terminal: false });
-
-rl.on("line", async (line) => {
+function handleInboundLine(line, channel) {
   let req;
   try {
     req = JSON.parse(line);
   } catch {
-    return; // Ignore malformed input
+    return;
   }
 
-  try {
-    const result = await handleRequest(req);
-    sendResponse(req.id, result, null);
-  } catch (e) {
-    sendResponse(req.id, null, e);
+  if (channel === "stdio" && transportMode === "hybrid" && req.method !== "init" && req.method !== "shutdown") {
+    sendResponse(req.id, null, new Error(`Unsupported stdio method in hybrid mode: ${req.method}`), channel);
+    return;
   }
-});
 
-rl.on("close", () => {
-  process.exit(0);
-});
+  void (async () => {
+    try {
+      if (channel === "socket") {
+        await socketReadyPromise;
+      }
+      const result = await handleRequest(req);
+      sendResponse(req.id, result, null, channel);
+    } catch (e) {
+      sendResponse(req.id, null, e, channel);
+    }
+  })();
+}
 
-// Keep process alive
-process.stdin.resume();
+if (transportMode === "stdio" || transportMode === "hybrid") {
+  const rl = createInterface({ input: process.stdin, terminal: false });
+  rl.on("line", (line) => {
+    handleInboundLine(line, "stdio");
+  });
+  rl.on("close", () => {
+    if (transportMode === "stdio") {
+      process.exit(0);
+    }
+  });
+  process.stdin.resume();
+}

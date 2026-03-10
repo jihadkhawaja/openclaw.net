@@ -26,11 +26,11 @@ public static class GatewaySecurityExtensions
                 "or explicitly opt in via OpenClaw:Security:AllowUnsafeToolingOnPublicBind=true.");
         }
 
-        if (config.Plugins.Enabled && !config.Security.AllowPluginBridgeOnPublicBind)
+        if ((config.Plugins.Enabled || config.Plugins.DynamicNative.Enabled) && !config.Security.AllowPluginBridgeOnPublicBind)
         {
             throw new InvalidOperationException(
-                "Refusing to start with the JS plugin bridge enabled on a non-loopback bind. " +
-                "Disable OpenClaw:Plugins:Enabled, or explicitly opt in via OpenClaw:Security:AllowPluginBridgeOnPublicBind=true.");
+                "Refusing to start with third-party plugin execution enabled on a non-loopback bind. " +
+                "Disable OpenClaw:Plugins:Enabled / OpenClaw:Plugins:DynamicNative:Enabled, or explicitly opt in via OpenClaw:Security:AllowPluginBridgeOnPublicBind=true.");
         }
 
         if (config.Channels.WhatsApp.Enabled)

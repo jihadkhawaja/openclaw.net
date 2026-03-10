@@ -68,17 +68,52 @@ jobs:
       - name: Install AOT prerequisites
         run: sudo apt-get update && sudo apt-get install -y clang zlib1g-dev
 
-      - name: Publish NativeAOT
+      - name: Publish and smoke-test NativeAOT binaries
         run: |
-          dotnet publish src/OpenClaw.Gateway/OpenClaw.Gateway.csproj \
-            -c Release \
-            -o ./publish
+          chmod +x ./eng/verify-aot-smoke.sh
+          ./eng/verify-aot-smoke.sh
 
-      - name: Upload artifact
+      - name: Upload gateway artifact
         uses: actions/upload-artifact@v4
         with:
-          name: openclaw-gateway-linux-x64
-          path: ./publish/
+          name: openclaw-gateway-aot-linux-x64
+          path: ./artifacts/aot/gateway/
+
+      - name: Upload CLI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: openclaw-cli-aot-linux-x64
+          path: ./artifacts/aot/cli/
+
+  publish-jit:
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Publish and smoke-test JIT binaries
+        run: |
+          chmod +x ./eng/verify-jit-smoke.sh
+          ./eng/verify-jit-smoke.sh
+
+      - name: Upload gateway artifact
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: openclaw-gateway-jit-linux-x64
+          path: ./artifacts/jit/gateway/
+
+      - name: Upload CLI artifact
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: openclaw-cli-jit-linux-x64
+          path: ./artifacts/jit/cli/
 
   docker:
     needs: build-and-test

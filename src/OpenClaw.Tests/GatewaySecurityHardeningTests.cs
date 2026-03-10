@@ -48,6 +48,18 @@ public sealed class GatewaySecurityHardeningTests
     }
 
     [Fact]
+    public void EnforcePublicBindHardening_DynamicNativePluginsOnPublicBind_Throws()
+    {
+        var config = CreatePublicBindSafeBaseConfig();
+        config.Plugins.DynamicNative.Enabled = true;
+
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            GatewaySecurityExtensions.EnforcePublicBindHardening(config, isNonLoopbackBind: true));
+
+        Assert.Contains("DynamicNative", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void EnforcePublicBindHardening_Loopback_DoesNotApplyPublicChecks()
     {
         var config = new GatewayConfig();

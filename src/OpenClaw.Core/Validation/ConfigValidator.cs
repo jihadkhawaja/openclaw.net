@@ -1,4 +1,5 @@
 using OpenClaw.Core.Security;
+using OpenClaw.Core.Models;
 
 namespace OpenClaw.Core.Validation;
 
@@ -99,6 +100,19 @@ public static class ConfigValidator
             errors.Add($"SessionTokenBudget must be >= 0 (got {config.SessionTokenBudget}).");
         if (config.SessionRateLimitPerMinute < 0)
             errors.Add($"SessionRateLimitPerMinute must be >= 0 (got {config.SessionRateLimitPerMinute}).");
+
+        // Plugin bridge transport
+        var transportMode = (config.Plugins.Transport.Mode ?? "stdio").Trim();
+        if (!transportMode.Equals("stdio", StringComparison.OrdinalIgnoreCase) &&
+            !transportMode.Equals("socket", StringComparison.OrdinalIgnoreCase) &&
+            !transportMode.Equals("hybrid", StringComparison.OrdinalIgnoreCase))
+        {
+            errors.Add("Plugins.Transport.Mode must be 'stdio', 'socket', or 'hybrid'.");
+        }
+
+        var runtimeMode = RuntimeModeResolver.Normalize(config.Runtime.Mode);
+        if (runtimeMode is not ("auto" or "aot" or "jit"))
+            errors.Add("Runtime.Mode must be 'auto', 'aot', or 'jit'.");
 
         // Channels
         if (config.Channels.Sms.Twilio.MaxInboundChars < 1)

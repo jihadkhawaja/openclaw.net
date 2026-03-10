@@ -28,8 +28,9 @@ There are two primary ways to add new capabilities to your agent:
    - Run `npm install` inside that plugin's folder.
    - For TypeScript plugins, also ensure `jiti` is present in the plugin dependency tree.
    - Restart the OpenClaw.NET gateway. The gateway will automatically detect, load, and bridge the plugin!
-   - Supported today: `registerTool`, tool execution, `registerService`, plugin-packaged skills, `.js` / `.mjs` / `.ts` discovery, and the documented config-schema subset.
-   - Unsupported extension-host APIs fail fast with explicit diagnostics instead of partially loading.
+   - `Runtime:Mode=aot`: supports `registerTool`, tool execution, `registerService`, plugin-packaged skills, `.js` / `.mjs` / `.ts` discovery, and the documented config-schema subset.
+   - `Runtime:Mode=jit`: additionally supports `registerChannel`, `registerCommand`, `registerProvider`, and `api.on(...)`.
+   - Unsupported extension-host APIs, or JIT-only capabilities in AOT mode, fail fast with explicit diagnostics instead of partially loading.
    - *For the exact matrix and current proof points, see the [Compatibility Guide](COMPATIBILITY.md).*
 
 ---
@@ -374,4 +375,5 @@ Any tool provided by a TypeScript or JavaScript plugin (e.g., `notion-search`, `
 
 - **Requirement**: Node.js 18+ installed on your system.
 - **Config**: Ensure `OpenClaw:Plugins:Enabled` is set to `true`.
+- **Mode**: `OpenClaw:Runtime:Mode=aot` for the strict low-memory lane, or `jit` for channels/commands/providers/hooks and native dynamic plugins.
 - **Note**: Bridged tools may have slightly higher latency than native (C#) tools due to Inter-Process Communication (IPC).

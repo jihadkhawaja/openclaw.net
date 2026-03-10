@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using Microsoft.Extensions.AI;
 using OpenClaw.Core.Models;
 
@@ -6,8 +7,22 @@ namespace OpenClaw.Gateway.Extensions;
 
 public static class LlmClientFactory
 {
+    private static readonly ConcurrentDictionary<string, IChatClient> _dynamicProviders = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Registers a dynamic provider (e.g. from a plugin bridge).
+    /// </summary>
+    public static void RegisterProvider(string providerName, IChatClient client)
+    {
+        _dynamicProviders[providerName] = client;
+    }
+
     public static IChatClient CreateChatClient(LlmProviderConfig config)
     {
+        // Check dynamic providers first (plugin-registered)
+        if (_dynamicProviders.TryGetValue(config.Provider, out var dynamicClient))
+            return dynamicClient;
+
         return config.Provider.ToLowerInvariant() switch
         {
             "openai" => CreateOpenAiClient(config)

@@ -10,13 +10,15 @@ namespace OpenClaw.Core.Validation;
 /// </summary>
 public static class DoctorCheck
 {
-    public static async Task<bool> RunAsync(GatewayConfig config)
+    public static async Task<bool> RunAsync(GatewayConfig config, GatewayRuntimeState runtimeState)
     {
         AnsiConsole.MarkupLine("\n[bold cyan]OpenClaw.NET Doctor Mode[/]\n");
         var allPassed = true;
 
         // Note: by the time Doctor runs, the Gateway has already applied env var overrides
         // (MODEL_PROVIDER_KEY, etc.). So this should reflect the effective configuration.
+        allPassed &= Check("Runtime mode resolved", () => true, detail:
+            $"requested={runtimeState.RequestedMode}, effective={runtimeState.EffectiveModeName}, dynamic_code_supported={runtimeState.DynamicCodeSupported}");
         allPassed &= Check("LLM API Key configured", () => !string.IsNullOrWhiteSpace(config.Llm.ApiKey));
         
         allPassed &= Check("LLM max tokens > 0", () => config.Llm.MaxTokens > 0);
@@ -32,6 +34,15 @@ public static class DoctorCheck
             allPassed &= Check("Public Bind: Wildcard read/write roots disabled", () => 
                 !config.Tooling.AllowedReadRoots.Contains("*") && !config.Tooling.AllowedWriteRoots.Contains("*"),
                 warnOnly: true, "Wildcard (*) filesystem access is enabled on a public bind. Data exfiltration risk.");
+        }
+
+        if (config.Plugins.DynamicNative.Enabled)
+        {
+            allPassed &= Check(
+                "Dynamic native plugins require JIT mode",
+                () => runtimeState.EffectiveMode == GatewayRuntimeMode.Jit,
+                warnOnly: false,
+                detail: "Disable OpenClaw:Plugins:DynamicNative:Enabled or run a JIT-capable artifact / mode.");
         }
 
         allPassed &= Check("Storage path exists and is writable", () =>
