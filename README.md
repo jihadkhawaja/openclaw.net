@@ -359,6 +359,43 @@ docker run -d -p 18789:18789 \
   openclaw.net
 ```
 
+### Optional MAF backend
+
+OpenClaw ships with `native` as the default orchestrator. Microsoft Agent Framework (MAF) is supported as an optional backend only in the MAF-enabled build artifacts.
+
+Runtime selection:
+
+```json
+{
+  "OpenClaw": {
+    "Runtime": {
+      "Mode": "auto|jit|aot",
+      "Orchestrator": "native|maf"
+    }
+  }
+}
+```
+
+- Standard artifacts support `Runtime.Orchestrator=native` only and fail fast if `maf` is configured.
+- MAF-enabled artifacts support both `native` and `maf`.
+- `Runtime.Mode=auto` behavior is unchanged.
+- `native` remains the default even in MAF-enabled artifacts.
+
+Publish the supported artifact set with:
+
+```bash
+bash eng/publish-gateway-artifacts.sh
+```
+
+This produces:
+
+- `artifacts/releases/gateway-standard-jit`
+- `artifacts/releases/gateway-maf-enabled-jit`
+- `artifacts/releases/gateway-standard-aot`
+- `artifacts/releases/gateway-maf-enabled-aot`
+
+MAF is still a prerelease dependency, so the MAF-enabled artifacts should be versioned and rolled out deliberately even though the backend is feature-complete in this repository.
+
 ### Published images
 
 The same multi-arch image is published to:
@@ -533,8 +570,9 @@ Set log levels in config:
 ## CI/CD
 
 GitHub Actions workflow (`.github/workflows/ci.yml`):
-- **On push/PR to main**: build + test
-- **On push to main**: publish NativeAOT binary artifact + Docker image to GitHub Container Registry
+- **On push/PR to main**: build + test both the standard and MAF-enabled gateway/test targets
+- **On push to main**: publish and upload `gateway-standard-{jit|aot}` plus `gateway-maf-enabled-{jit|aot}` gateway artifacts
+- **On push to main**: publish NativeAOT CLI artifact + Docker image to GitHub Container Registry
 
 ## Contributing
 
