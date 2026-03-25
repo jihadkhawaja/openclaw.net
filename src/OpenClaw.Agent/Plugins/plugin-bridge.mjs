@@ -316,6 +316,7 @@ function createLogger(pluginId) {
 
 async function loadPlugin(entryPath) {
   const ext = entryPath.split(".").pop()?.toLowerCase();
+  const entryUrl = pathToFileURL(entryPath).href;
 
   if (ext === "ts") {
     const jitiPath = findJiti(entryPath);
@@ -326,9 +327,9 @@ async function loadPlugin(entryPath) {
     }
 
     try {
-      const { default: createJiti } = await import(jitiPath);
-      const jiti = createJiti(entryPath, { interopDefault: true });
-      return jiti(entryPath);
+      const { default: createJiti } = await import(pathToFileURL(jitiPath).href);
+      const jiti = createJiti(entryUrl, { interopDefault: true });
+      return jiti(entryUrl);
     } catch (e) {
       throw new Error(
         `Failed to load TypeScript plugin "${entryPath}" via jiti: ${e?.message ?? "unknown error"}. Ensure 'jiti' is installed and the plugin is valid.`
@@ -346,8 +347,7 @@ async function loadPlugin(entryPath) {
     }
   }
 
-  const url = pathToFileURL(entryPath).href;
-  const mod = await import(url);
+  const mod = await import(entryUrl);
   return mod.default ?? mod;
 }
 
