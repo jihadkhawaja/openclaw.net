@@ -24,7 +24,7 @@ public sealed class McpServerToolRegistryTests : IAsyncDisposable
     [Fact]
     public async Task LoadAsync_HttpServer_DiscoversAndExecutesTools()
     {
-        var (serverUrl, calls) = await StartMcpServerAsync();
+        var (serverUrl, calls) = await StartMcpServerAsync<DemoMcpTools>();
         using var registry = new McpServerToolRegistry(
             new McpPluginsConfig
             {
@@ -66,7 +66,7 @@ public sealed class McpServerToolRegistryTests : IAsyncDisposable
         Environment.SetEnvironmentVariable("TEST_AUTH_TOKEN", "secret-token-123");
         try
         {
-            var (serverUrl, calls, receivedHeaders) = await StartMcpServerWithHeaderCheckAsync();
+            var (serverUrl, calls, receivedHeaders) = await StartMcpServerWithHeaderCheckAsync<DemoMcpTools>();
             using var registry = new McpServerToolRegistry(
                 new McpPluginsConfig
                 {
@@ -106,9 +106,66 @@ public sealed class McpServerToolRegistryTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task LoadAsync_HttpServer_WithStructuredContentOnly_ReturnsStructuredJson()
+    {
+        var (serverUrl, _) = await StartMcpServerAsync<StructuredMcpTools>();
+        using var registry = new McpServerToolRegistry(
+            new McpPluginsConfig
+            {
+                Enabled = true,
+                Servers = new Dictionary<string, McpServerConfig>(StringComparer.Ordinal)
+                {
+                    ["demo"] = new()
+                    {
+                        Transport = "http",
+                        Url = serverUrl
+                    }
+                }
+            },
+            NullLogger<McpServerToolRegistry>.Instance);
+        using var nativeRegistry = new NativePluginRegistry(new NativePluginsConfig(), NullLogger.Instance, new ToolingConfig());
+
+        await registry.RegisterToolsAsync(nativeRegistry, CancellationToken.None);
+
+        var tool = Assert.Single(nativeRegistry.Tools);
+        var result = await tool.ExecuteAsync("{}", CancellationToken.None);
+        using var document = JsonDocument.Parse(result);
+        Assert.Equal(123, document.RootElement.GetProperty("value").GetInt32());
+        Assert.Equal("ok", document.RootElement.GetProperty("status").GetString());
+    }
+
+    [Fact]
+    public async Task LoadAsync_HttpServer_WithImageContentBlock_ReturnsSerializedContent()
+    {
+        var (serverUrl, _) = await StartMcpServerAsync<BinaryMcpTools>();
+        using var registry = new McpServerToolRegistry(
+            new McpPluginsConfig
+            {
+                Enabled = true,
+                Servers = new Dictionary<string, McpServerConfig>(StringComparer.Ordinal)
+                {
+                    ["demo"] = new()
+                    {
+                        Transport = "http",
+                        Url = serverUrl
+                    }
+                }
+            },
+            NullLogger<McpServerToolRegistry>.Instance);
+        using var nativeRegistry = new NativePluginRegistry(new NativePluginsConfig(), NullLogger.Instance, new ToolingConfig());
+
+        await registry.RegisterToolsAsync(nativeRegistry, CancellationToken.None);
+
+        var tool = Assert.Single(nativeRegistry.Tools);
+        var result = await tool.ExecuteAsync("{}", CancellationToken.None);
+        Assert.Contains("image/png", result, StringComparison.Ordinal);
+        Assert.Contains("type", result, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task RegisterToolsAsync_MultipleCalls_DoesNotRegisterSelfAsOwnedResource()
     {
-        var (serverUrl, _) = await StartMcpServerAsync();
+        var (serverUrl, _) = await StartMcpServerAsync<DemoMcpTools>();
         using var registry = new McpServerToolRegistry(
             new McpPluginsConfig
             {
@@ -138,7 +195,7 @@ public sealed class McpServerToolRegistryTests : IAsyncDisposable
     [Fact]
     public async Task LoadAsync_ConcurrentCalls_LoadsToolsOnce()
     {
-        var (serverUrl, calls) = await StartMcpServerAsync();
+        var (serverUrl, calls) = await StartMcpServerAsync<DemoMcpTools>();
         using var registry = new McpServerToolRegistry(
             new McpPluginsConfig
             {
@@ -167,7 +224,7 @@ public sealed class McpServerToolRegistryTests : IAsyncDisposable
     [Fact]
     public async Task LoadAsync_WhenFirstAttemptFails_AllowsRetryAndLoadsTools()
     {
-        var (serverUrl, _) = await StartMcpServerAsync();
+        var (serverUrl, _) = await StartMcpServerAsync<DemoMcpTools>();
         var config = new McpPluginsConfig
         {
             Enabled = true,
@@ -205,7 +262,7 @@ public sealed class McpServerToolRegistryTests : IAsyncDisposable
     [Fact]
     public async Task LoadAsync_UsesRequestTimeoutForToolListing_NotStartupTimeout()
     {
-        var (serverUrl, _) = await StartMcpServerAsync(TimeSpan.FromSeconds(2));
+        var (serverUrl, _) = await StartMcpServerAsync<DemoMcpTools>(TimeSpan.FromSeconds(2));
         using var registry = new McpServerToolRegistry(
             new McpPluginsConfig
             {
@@ -230,13 +287,61 @@ public sealed class McpServerToolRegistryTests : IAsyncDisposable
         Assert.Equal("demo.echo", tool.Name);
     }
 
+    [Fact]
+    public async Task LoadAsync_AfterDispose_ThrowsObjectDisposedException()
+    {
+        using var registry = new McpServerToolRegistry(
+            new McpPluginsConfig
+            {
+                Enabled = true,
+                Servers = new Dictionary<string, McpServerConfig>(StringComparer.Ordinal)
+            },
+            NullLogger<McpServerToolRegistry>.Instance);
+
+        registry.Dispose();
+
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => registry.LoadAsync(CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Dispose_MayBeCalledTwice_AfterToolRegistration()
+    {
+        var (serverUrl, _) = await StartMcpServerAsync<DemoMcpTools>();
+        var registry = new McpServerToolRegistry(
+            new McpPluginsConfig
+            {
+                Enabled = true,
+                Servers = new Dictionary<string, McpServerConfig>(StringComparer.Ordinal)
+                {
+                    ["demo"] = new()
+                    {
+                        Transport = "http",
+                        Url = serverUrl
+                    }
+                }
+            },
+            NullLogger<McpServerToolRegistry>.Instance);
+        using var nativeRegistry = new NativePluginRegistry(new NativePluginsConfig(), NullLogger.Instance, new ToolingConfig());
+
+        await registry.RegisterToolsAsync(nativeRegistry, CancellationToken.None);
+
+        var ex = Record.Exception(() =>
+        {
+            registry.Dispose();
+            registry.Dispose();
+        });
+
+        Assert.Null(ex);
+    }
+
     public async ValueTask DisposeAsync()
     {
         foreach (var app in _apps)
             await app.DisposeAsync();
     }
 
-    private async Task<(string ServerUrl, McpCallTracker Tracker)> StartMcpServerAsync(TimeSpan? toolsListDelay = null)
+    private async Task<(string ServerUrl, McpCallTracker Tracker)> StartMcpServerAsync<TTools>(TimeSpan? toolsListDelay = null)
+        where TTools : class
     {
         var tracker = new McpCallTracker();
         var builder = WebApplication.CreateSlimBuilder();
@@ -251,7 +356,7 @@ public sealed class McpServerToolRegistryTests : IAsyncDisposable
                 };
             })
             .WithHttpTransport(options => { options.Stateless = true; })
-            .WithTools<DemoMcpTools>();
+            .WithTools<TTools>();
         var app = builder.Build();
         app.Use(async (context, next) =>
         {
@@ -266,7 +371,8 @@ public sealed class McpServerToolRegistryTests : IAsyncDisposable
         return ($"{address.TrimEnd('/')}/mcp", tracker);
     }
 
-    private async Task<(string ServerUrl, McpCallTracker Tracker, Dictionary<string, string> ReceivedHeaders)> StartMcpServerWithHeaderCheckAsync()
+    private async Task<(string ServerUrl, McpCallTracker Tracker, Dictionary<string, string> ReceivedHeaders)> StartMcpServerWithHeaderCheckAsync<TTools>()
+        where TTools : class
     {
         var tracker = new McpCallTracker();
         var receivedHeaders = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -282,7 +388,7 @@ public sealed class McpServerToolRegistryTests : IAsyncDisposable
                 };
             })
             .WithHttpTransport(options => { options.Stateless = true; })
-            .WithTools<DemoMcpTools>();
+            .WithTools<TTools>();
         var app = builder.Build();
         app.Use(async (context, next) =>
         {
@@ -348,5 +454,27 @@ public sealed class McpServerToolRegistryTests : IAsyncDisposable
         [McpServerTool(Name = "echo", ReadOnly = true), Description("Demo echo tool")]
         public string Echo([Description("text")] string text)
             => $"demo:{text}";
+    }
+
+    [McpServerToolType]
+    private sealed class StructuredMcpTools
+    {
+        [McpServerTool(Name = "structured", ReadOnly = true), Description("Structured response tool")]
+        public CallToolResult Structured()
+            => new()
+            {
+                StructuredContent = JsonSerializer.SerializeToElement(new { value = 123, status = "ok" })
+            };
+    }
+
+    [McpServerToolType]
+    private sealed class BinaryMcpTools
+    {
+        [McpServerTool(Name = "image", ReadOnly = true), Description("Image response tool")]
+        public CallToolResult Image()
+            => new()
+            {
+                Content = [ImageContentBlock.FromBytes("png-bytes"u8.ToArray(), "image/png")]
+            };
     }
 }

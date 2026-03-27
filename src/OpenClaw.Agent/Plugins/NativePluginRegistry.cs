@@ -230,10 +230,28 @@ public sealed class NativePluginRegistry : IDisposable
         foreach (var tool in _tools)
         {
             if (tool is IDisposable d)
-                d.Dispose();
+            {
+                try
+                {
+                    d.Dispose();
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to dispose native tool '{ToolName}' during registry shutdown", tool.Name);
+                }
+            }
         }
 
         foreach (var resource in _ownedResources)
-            resource.Dispose();
+        {
+            try
+            {
+                resource.Dispose();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to dispose owned native-plugin resource during registry shutdown");
+            }
+        }
     }
 }

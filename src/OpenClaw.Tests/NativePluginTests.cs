@@ -168,6 +168,40 @@ public class NativePluginRegistryTests
 
         Assert.Equal(1, resource.DisposeCalls);
     }
+
+    [Fact]
+    public void Dispose_ToolDisposeFailure_DoesNotPreventOwnedResourceCleanup()
+    {
+        var registry = new NativePluginRegistry(new NativePluginsConfig(), NullLogger.Instance);
+        var tool = new ThrowingDisposableFakeTool("dup_tool");
+        var resource = new DisposableOwnedResource();
+
+        registry.RegisterExternalTool(tool, "mcp:test");
+        registry.RegisterOwnedResource(resource);
+
+        var ex = Record.Exception(() => registry.Dispose());
+
+        Assert.Null(ex);
+        Assert.Equal(1, tool.DisposeCalls);
+        Assert.Equal(1, resource.DisposeCalls);
+    }
+
+    [Fact]
+    public void Dispose_OwnedResourceDisposeFailure_DoesNotAbortRemainingCleanup()
+    {
+        var registry = new NativePluginRegistry(new NativePluginsConfig(), NullLogger.Instance);
+        var first = new ThrowingOwnedResource();
+        var second = new DisposableOwnedResource();
+
+        registry.RegisterOwnedResource(first);
+        registry.RegisterOwnedResource(second);
+
+        var ex = Record.Exception(() => registry.Dispose());
+
+        Assert.Null(ex);
+        Assert.Equal(1, first.DisposeCalls);
+        Assert.Equal(1, second.DisposeCalls);
+    }
 }
 
 public class PluginPreferenceTests
@@ -855,6 +889,16 @@ file sealed class DisposableOwnedResource : IDisposable
     public int DisposeCalls { get; private set; }
     public void Dispose()
         => DisposeCalls++;
+}
+
+file sealed class ThrowingOwnedResource : IDisposable
+{
+    public int DisposeCalls { get; private set; }
+    public void Dispose()
+    {
+        DisposeCalls++;
+        throw new InvalidOperationException("owned resource dispose failed");
+    }
 }
 
 /// <summary>Minimal ILogger for tests.</summary>

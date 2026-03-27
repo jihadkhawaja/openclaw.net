@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 using OpenClaw.Core.Abstractions;
@@ -50,13 +51,7 @@ public sealed class McpNativeTool(
                 argsDict[prop.Name] = value;
             }
             var response = await client.CallToolAsync(remoteName, argsDict, progress: null, cancellationToken: ct);
-            var parts = new List<string>();
-            foreach (var item in response.Content)
-            {
-                if (item is TextContentBlock t)
-                    parts.Add(t.Text ?? "");
-            }
-            var text = string.Join("\n\n", parts);
+            var text = FormatResponseContent(response);
             var isError = response.IsError ?? false;
             return isError ? $"Error: {text}" : text;
         }
@@ -73,4 +68,50 @@ public sealed class McpNativeTool(
             return $"Error: MCP tool '{localName}' failed: {ex.Message}";
         }
     }
+
+    private static string FormatResponseContent(CallToolResult response)
+    {
+        var parts = new List<string>();
+
+        foreach (var item in response.Content ?? [])
+        {
+            switch (item)
+            {
+                case TextContentBlock textBlock when !string.IsNullOrEmpty(textBlock.Text):
+                    parts.Add(textBlock.Text);
+                    break;
+                case EmbeddedResourceBlock { Resource: TextResourceContents resource } when !string.IsNullOrEmpty(resource.Text):
+                    parts.Add(resource.Text);
+                    break;
+                default:
+                    parts.Add(JsonSerializer.Serialize(item, McpToolSerializerContext.Default.ContentBlock));
+                    break;
+            }
+        }
+
+        if (response.StructuredContent is { } structuredContent &&
+            structuredContent.ValueKind is not (JsonValueKind.Undefined or JsonValueKind.Null))
+        {
+            parts.Add(structuredContent.GetRawText());
+        }
+
+        return string.Join("\n\n", parts);
+    }
 }
+
+[JsonSerializable(typeof(ContentBlock))]
+[JsonSerializable(typeof(TextContentBlock))]
+[JsonSerializable(typeof(ImageContentBlock))]
+[JsonSerializable(typeof(AudioContentBlock))]
+[JsonSerializable(typeof(EmbeddedResourceBlock))]
+[JsonSerializable(typeof(ResourceLinkBlock))]
+[JsonSerializable(typeof(ToolUseContentBlock))]
+[JsonSerializable(typeof(ToolResultContentBlock))]
+[JsonSerializable(typeof(ResourceContents))]
+[JsonSerializable(typeof(TextResourceContents))]
+[JsonSerializable(typeof(BlobResourceContents))]
+[JsonSourceGenerationOptions(
+    PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,
+    DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+    WriteIndented = false)]
+internal sealed partial class McpToolSerializerContext : JsonSerializerContext;

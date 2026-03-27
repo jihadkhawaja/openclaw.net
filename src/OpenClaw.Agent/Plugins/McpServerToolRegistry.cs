@@ -22,6 +22,7 @@ public sealed class McpServerToolRegistry : IDisposable
     private readonly List<McpClient> _clients = [];
     private bool _loaded;
     private bool _registered;
+    private bool _disposed;
 
     /// <summary>
     /// Creates a registry for configured MCP servers.
@@ -37,9 +38,11 @@ public sealed class McpServerToolRegistry : IDisposable
     /// </summary>
     public async Task RegisterToolsAsync(NativePluginRegistry nativeRegistry, CancellationToken ct)
     {
+        ThrowIfDisposed();
         await _loadSemaphore.WaitAsync(ct);
         try
         {
+            ThrowIfDisposed();
             if (_registered)
                 return;
 
@@ -57,9 +60,11 @@ public sealed class McpServerToolRegistry : IDisposable
 
     internal async Task<IReadOnlyList<DiscoveredMcpTool>> LoadAsync(CancellationToken ct)
     {
+        ThrowIfDisposed();
         await _loadSemaphore.WaitAsync(ct);
         try
         {
+            ThrowIfDisposed();
             return _loaded ? _tools : await LoadInternalAsync(ct);
         }
         finally
@@ -120,8 +125,7 @@ public sealed class McpServerToolRegistry : IDisposable
             {
                 try
                 {
-                    (client as IDisposable)?.Dispose();
-                    (client as IAsyncDisposable)?.DisposeAsync().GetAwaiter().GetResult();
+                    DisposeClient(client);
                 }
                 catch
                 {
@@ -218,27 +222,28 @@ public sealed class McpServerToolRegistry : IDisposable
 
         try
         {
+            if (_disposed)
+                return;
+
+            _disposed = true;
             foreach (var client in _clients)
             {
                 try
                 {
-                    (client as IDisposable)?.Dispose();
-                    (client as IAsyncDisposable)?.DisposeAsync().GetAwaiter().GetResult();
+                    DisposeClient(client);
                 }
                 catch
                 {
                 }
             }
+            _clients.Clear();
         }
         finally
         {
             if (acquired)
                 _loadSemaphore.Release();
-            _loadSemaphore.Dispose();
         }
     }
-
-
 
     private static IClientTransport CreateTransport(string serverId, McpServerConfig config)
     {
@@ -305,6 +310,24 @@ public sealed class McpServerToolRegistry : IDisposable
         }
 
         return resolved;
+    }
+
+    private void ThrowIfDisposed()
+    {
+        if (_disposed)
+            throw new ObjectDisposedException(nameof(McpServerToolRegistry));
+    }
+
+    private static void DisposeClient(McpClient client)
+    {
+        if (client is IAsyncDisposable asyncDisposable)
+        {
+            asyncDisposable.DisposeAsync().AsTask().GetAwaiter().GetResult();
+            return;
+        }
+
+        if (client is IDisposable disposable)
+            disposable.Dispose();
     }
 
     internal sealed record DiscoveredMcpTool(string PluginId, ITool Tool, string Detail);
