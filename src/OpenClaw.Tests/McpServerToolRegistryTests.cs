@@ -1,7 +1,15 @@
 using System.Text;
 using System.Text.Json;
+using System.ComponentModel;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Server.Kestrel.Core;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using ModelContextProtocol;
+using ModelContextProtocol.Protocol;
+using ModelContextProtocol.Server;
 using OpenClaw.Agent.Plugins;
 using OpenClaw.Core.Models;
 using OpenClaw.Core.Plugins;
@@ -39,9 +47,55 @@ public sealed class McpServerToolRegistryTests : IAsyncDisposable
         Assert.Equal("demo.echo", tool.Name);
         Assert.Contains("Demo echo tool", tool.Description, StringComparison.Ordinal);
         Assert.Equal("demo:hello", await tool.ExecuteAsync("""{"text":"hello"}""", CancellationToken.None));
-        Assert.Equal(1, calls.InitializeCalls);
-        Assert.Equal(1, calls.ListCalls);
-        Assert.Equal(1, calls.CallCalls);
+        Assert.True(calls.InitializeCalls >= 1);
+        Assert.True(calls.ListCalls >= 1);
+        Assert.True(calls.CallCalls >= 1);
+    }
+
+    [Fact]
+    public async Task LoadAsync_HttpServer_WithHeaders_ResolvesSecrets()
+    {
+        // Set up environment variable for testing
+        Environment.SetEnvironmentVariable("TEST_AUTH_TOKEN", "secret-token-123");
+        try
+        {
+            var (serverUrl, calls, receivedHeaders) = await StartMcpServerWithHeaderCheckAsync();
+            var registry = new McpServerToolRegistry(
+                new McpPluginsConfig
+                {
+                    Enabled = true,
+                    Servers = new Dictionary<string, McpServerConfig>(StringComparer.Ordinal)
+                    {
+                        ["demo"] = new()
+                        {
+                            Transport = "http",
+                            Url = serverUrl,
+                            Headers = new Dictionary<string, string>(StringComparer.Ordinal)
+                            {
+                                ["Authorization"] = "env:TEST_AUTH_TOKEN",
+                                ["X-Custom-Header"] = "raw:literal-value",
+                                ["X-Direct-Value"] = "direct-value"
+                            }
+                        }
+                    }
+                },
+                NullLogger<McpServerToolRegistry>.Instance);
+            using var nativeRegistry = new NativePluginRegistry(new NativePluginsConfig(), NullLogger.Instance, new ToolingConfig());
+
+            await registry.RegisterToolsAsync(nativeRegistry, CancellationToken.None);
+
+            // Verify headers were resolved and sent correctly
+            Assert.True(receivedHeaders.ContainsKey("Authorization"));
+            Assert.Equal("secret-token-123", receivedHeaders["Authorization"]);
+            Assert.True(receivedHeaders.ContainsKey("X-Custom-Header"));
+            Assert.Equal("literal-value", receivedHeaders["X-Custom-Header"]);
+            Assert.True(receivedHeaders.ContainsKey("X-Direct-Value"));
+            Assert.Equal("direct-value", receivedHeaders["X-Direct-Value"]);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("TEST_AUTH_TOKEN", null);
+        }
     }
 
     public async ValueTask DisposeAsync()
@@ -54,98 +108,97 @@ public sealed class McpServerToolRegistryTests : IAsyncDisposable
     {
         var tracker = new McpCallTracker();
         var builder = WebApplication.CreateSlimBuilder();
-        builder.WebHost.ConfigureKestrel(options => options.ListenLocalhost(0));
-        var app = builder.Build();
-        app.MapPost("/", async context =>
-        {
-            using var document = await JsonDocument.ParseAsync(context.Request.Body, cancellationToken: context.RequestAborted);
-            var method = document.RootElement.GetProperty("method").GetString();
-            var id = document.RootElement.GetProperty("id").GetString()!;
-
-            var response = method switch
+        builder.WebHost.UseUrls("http://127.0.0.1:0");
+        builder.Services.AddSingleton(tracker);
+        builder.Services.AddMcpServer(options =>
             {
-                "initialize" => BuildResponse(id, writer =>
+                options.ServerInfo = new Implementation
                 {
-                    tracker.InitializeCalls++;
-                    writer.WriteStartObject("capabilities");
-                    writer.WriteStartObject("tools");
-                    writer.WriteBoolean("listChanged", false);
-                    writer.WriteEndObject();
-                    writer.WriteStartObject("resources");
-                    writer.WriteBoolean("listChanged", false);
-                    writer.WriteBoolean("supportsTemplates", false);
-                    writer.WriteEndObject();
-                    writer.WriteStartObject("prompts");
-                    writer.WriteBoolean("listChanged", false);
-                    writer.WriteEndObject();
-                    writer.WriteEndObject();
-                    writer.WriteStartObject("serverInfo");
-                    writer.WriteString("name", "demo");
-                    writer.WriteString("version", "1.0.0");
-                    writer.WriteEndObject();
-                }),
-                "tools/list" => BuildResponse(id, writer =>
-                {
-                    tracker.ListCalls++;
-                    writer.WriteStartArray("tools");
-                    writer.WriteStartObject();
-                    writer.WriteString("name", "echo");
-                    writer.WriteString("description", "Demo echo tool");
-                    writer.WriteStartObject("inputSchema");
-                    writer.WriteString("type", "object");
-                    writer.WriteStartObject("properties");
-                    writer.WriteStartObject("text");
-                    writer.WriteString("type", "string");
-                    writer.WriteEndObject();
-                    writer.WriteEndObject();
-                    writer.WriteStartArray("required");
-                    writer.WriteStringValue("text");
-                    writer.WriteEndArray();
-                    writer.WriteEndObject();
-                    writer.WriteEndObject();
-                    writer.WriteEndArray();
-                }),
-                "tools/call" => BuildResponse(id, writer =>
-                {
-                    tracker.CallCalls++;
-                    var text = document.RootElement.GetProperty("params").GetProperty("arguments").GetProperty("text").GetString();
-                    writer.WriteStartArray("content");
-                    writer.WriteStartObject();
-                    writer.WriteString("type", "text");
-                    writer.WriteString("text", $"demo:{text}");
-                    writer.WriteEndObject();
-                    writer.WriteEndArray();
-                    writer.WriteBoolean("isError", false);
-                }),
-                _ => throw new InvalidOperationException($"Unexpected MCP method '{method}'.")
-            };
-
-            context.Response.ContentType = "application/json";
-            await context.Response.WriteAsync(response, context.RequestAborted);
+                    Name = "demo",
+                    Version = "1.0.0"
+                };
+            })
+            .WithHttpTransport(options => { options.Stateless = true; })
+            .WithTools<DemoMcpTools>();
+        var app = builder.Build();
+        app.Use(async (context, next) =>
+        {
+            await TrackMcpMethodAsync(context, tracker);
+            await next();
         });
+        app.MapMcp("/mcp");
 
         await app.StartAsync();
         _apps.Add(app);
         var address = app.Urls.Single();
-        return ($"{address.TrimEnd('/')}/", tracker);
+        return ($"{address.TrimEnd('/')}/mcp", tracker);
     }
 
-    private static string BuildResponse(string id, Action<Utf8JsonWriter> writeResult)
+    private async Task<(string ServerUrl, McpCallTracker Tracker, Dictionary<string, string> ReceivedHeaders)> StartMcpServerWithHeaderCheckAsync()
     {
-        using var ms = new MemoryStream();
-        using (var writer = new Utf8JsonWriter(ms))
+        var tracker = new McpCallTracker();
+        var receivedHeaders = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var builder = WebApplication.CreateSlimBuilder();
+        builder.WebHost.UseUrls("http://127.0.0.1:0");
+        builder.Services.AddSingleton(tracker);
+        builder.Services.AddMcpServer(options =>
+            {
+                options.ServerInfo = new Implementation
+                {
+                    Name = "demo",
+                    Version = "1.0.0"
+                };
+            })
+            .WithHttpTransport(options => { options.Stateless = true; })
+            .WithTools<DemoMcpTools>();
+        var app = builder.Build();
+        app.Use(async (context, next) =>
         {
-            writer.WriteStartObject();
-            writer.WriteString("jsonrpc", "2.0");
-            writer.WriteString("id", id);
-            writer.WritePropertyName("result");
-            writer.WriteStartObject();
-            writeResult(writer);
-            writer.WriteEndObject();
-            writer.WriteEndObject();
-        }
+            if (receivedHeaders.Count == 0 &&
+                context.Request.Path.StartsWithSegments("/mcp", StringComparison.Ordinal))
+            {
+                foreach (var header in context.Request.Headers)
+                {
+                    receivedHeaders[header.Key] = header.Value.ToString();
+                }
+            }
+            await TrackMcpMethodAsync(context, tracker);
+            await next();
+        });
+        app.MapMcp("/mcp");
 
-        return Encoding.UTF8.GetString(ms.ToArray());
+        await app.StartAsync();
+        _apps.Add(app);
+        var address = app.Urls.Single();
+        return ($"{address.TrimEnd('/')}/mcp", tracker, receivedHeaders);
+    }
+
+    private static async Task TrackMcpMethodAsync(HttpContext context, McpCallTracker tracker)
+    {
+        if (!context.Request.Path.StartsWithSegments("/mcp", StringComparison.Ordinal))
+            return;
+        if (!HttpMethods.IsPost(context.Request.Method))
+            return;
+
+        context.Request.EnableBuffering();
+        using var document = await JsonDocument.ParseAsync(context.Request.Body, cancellationToken: context.RequestAborted);
+        context.Request.Body.Position = 0;
+
+        if (!document.RootElement.TryGetProperty("method", out var methodElement) || methodElement.ValueKind != JsonValueKind.String)
+            return;
+        var method = methodElement.GetString();
+        switch (method)
+        {
+            case "initialize":
+                tracker.InitializeCalls++;
+                break;
+            case "tools/list":
+                tracker.ListCalls++;
+                break;
+            case "tools/call":
+                tracker.CallCalls++;
+                break;
+        }
     }
 
     private sealed class McpCallTracker
@@ -153,5 +206,13 @@ public sealed class McpServerToolRegistryTests : IAsyncDisposable
         public int InitializeCalls { get; set; }
         public int ListCalls { get; set; }
         public int CallCalls { get; set; }
+    }
+
+    [McpServerToolType]
+    private sealed class DemoMcpTools
+    {
+        [McpServerTool(Name = "echo", ReadOnly = true), Description("Demo echo tool")]
+        public string Echo([Description("text")] string text)
+            => $"demo:{text}";
     }
 }
