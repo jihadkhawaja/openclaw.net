@@ -170,32 +170,39 @@ public static class ConfigValidator
         // MCP plugin servers
         if (config.Plugins.Mcp.Enabled)
         {
-            foreach (var (serverId, server) in config.Plugins.Mcp.Servers)
+            if (config.Plugins.Mcp.Servers is null)
             {
-                if (!server.Enabled)
-                    continue;
-
-                var transport = server.NormalizeTransport();
-                if (transport is not ("stdio" or "http"))
+                errors.Add("Plugins.Mcp.Servers must be provided when MCP is enabled.");
+            }
+            else
+            {
+                foreach (var (serverId, server) in config.Plugins.Mcp.Servers)
                 {
-                    errors.Add($"Plugins.Mcp.Servers.{serverId}.Transport must be 'stdio' or 'http'.");
-                    continue;
-                }
+                    if (!server.Enabled)
+                        continue;
 
-                if (server.StartupTimeoutSeconds < 1)
-                    errors.Add($"Plugins.Mcp.Servers.{serverId}.StartupTimeoutSeconds must be >= 1 (got {server.StartupTimeoutSeconds}).");
-                if (server.RequestTimeoutSeconds < 1)
-                    errors.Add($"Plugins.Mcp.Servers.{serverId}.RequestTimeoutSeconds must be >= 1 (got {server.RequestTimeoutSeconds}).");
+                    var transport = server.NormalizeTransport();
+                    if (transport is not ("stdio" or "http"))
+                    {
+                        errors.Add($"Plugins.Mcp.Servers.{serverId}.Transport must be 'stdio' or 'http'.");
+                        continue;
+                    }
 
-                if (transport == "stdio")
-                {
-                    if (string.IsNullOrWhiteSpace(server.Command))
-                        errors.Add($"Plugins.Mcp.Servers.{serverId}.Command must be set when Transport='stdio'.");
-                }
-                else if (!Uri.TryCreate(server.Url, UriKind.Absolute, out var url) ||
-                         (url.Scheme != Uri.UriSchemeHttp && url.Scheme != Uri.UriSchemeHttps))
-                {
-                    errors.Add($"Plugins.Mcp.Servers.{serverId}.Url must be an absolute http(s) URL when Transport='http'.");
+                    if (server.StartupTimeoutSeconds < 1)
+                        errors.Add($"Plugins.Mcp.Servers.{serverId}.StartupTimeoutSeconds must be >= 1 (got {server.StartupTimeoutSeconds}).");
+                    if (server.RequestTimeoutSeconds < 1)
+                        errors.Add($"Plugins.Mcp.Servers.{serverId}.RequestTimeoutSeconds must be >= 1 (got {server.RequestTimeoutSeconds}).");
+
+                    if (transport == "stdio")
+                    {
+                        if (string.IsNullOrWhiteSpace(server.Command))
+                            errors.Add($"Plugins.Mcp.Servers.{serverId}.Command must be set when Transport='stdio'.");
+                    }
+                    else if (!Uri.TryCreate(server.Url, UriKind.Absolute, out var url) ||
+                             (url.Scheme != Uri.UriSchemeHttp && url.Scheme != Uri.UriSchemeHttps))
+                    {
+                        errors.Add($"Plugins.Mcp.Servers.{serverId}.Url must be an absolute http(s) URL when Transport='http'.");
+                    }
                 }
             }
         }

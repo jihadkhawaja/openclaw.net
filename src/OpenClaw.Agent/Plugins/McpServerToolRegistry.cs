@@ -248,7 +248,7 @@ public sealed class McpServerToolRegistry : IDisposable
             "stdio" => new StdioClientTransport(new StdioClientTransportOptions
             {
                 Command = config.Command!,
-                Arguments = config.Arguments,
+                Arguments = config.Arguments ?? [],
                 WorkingDirectory = config.WorkingDirectory,
                 EnvironmentVariables = ResolveEnv(config.Environment),
                 Name = serverId,
@@ -271,6 +271,11 @@ public sealed class McpServerToolRegistry : IDisposable
         var resolved = new Dictionary<string, string?>(StringComparer.Ordinal);
         foreach (var (name, rawValue) in environment)
         {
+            if (rawValue is null)
+            {
+                resolved[name] = null;
+                continue;
+            }
             var value = SecretResolver.Resolve(rawValue);
             if (value is null && rawValue.StartsWith("env:", StringComparison.Ordinal))
                 throw new InvalidOperationException($"Environment variable '{name}' references unset env var '{rawValue[4..]}'");
@@ -288,6 +293,11 @@ public sealed class McpServerToolRegistry : IDisposable
         var resolved = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var (name, rawValue) in headers)
         {
+            if (rawValue is null)
+            {
+                resolved[name] = string.Empty;
+                continue;
+            }
             var value = SecretResolver.Resolve(rawValue);
             if (value is null && rawValue.StartsWith("env:", StringComparison.Ordinal))
                 throw new InvalidOperationException($"Header '{name}' references unset env var '{rawValue[4..]}'");
