@@ -25,7 +25,7 @@ public sealed class McpServerToolRegistryTests : IAsyncDisposable
     public async Task LoadAsync_HttpServer_DiscoversAndExecutesTools()
     {
         var (serverUrl, calls) = await StartMcpServerAsync();
-        var registry = new McpServerToolRegistry(
+        using var registry = new McpServerToolRegistry(
             new McpPluginsConfig
             {
                 Enabled = true,
@@ -63,12 +63,11 @@ public sealed class McpServerToolRegistryTests : IAsyncDisposable
     [Fact]
     public async Task LoadAsync_HttpServer_WithHeaders_ResolvesSecrets()
     {
-        // Set up environment variable for testing
         Environment.SetEnvironmentVariable("TEST_AUTH_TOKEN", "secret-token-123");
         try
         {
             var (serverUrl, calls, receivedHeaders) = await StartMcpServerWithHeaderCheckAsync();
-            var registry = new McpServerToolRegistry(
+            using var registry = new McpServerToolRegistry(
                 new McpPluginsConfig
                 {
                     Enabled = true,
@@ -110,7 +109,7 @@ public sealed class McpServerToolRegistryTests : IAsyncDisposable
     public async Task RegisterToolsAsync_MultipleCalls_DoesNotRegisterSelfAsOwnedResource()
     {
         var (serverUrl, _) = await StartMcpServerAsync();
-        var registry = new McpServerToolRegistry(
+        using var registry = new McpServerToolRegistry(
             new McpPluginsConfig
             {
                 Enabled = true,
@@ -140,7 +139,7 @@ public sealed class McpServerToolRegistryTests : IAsyncDisposable
     public async Task LoadAsync_ConcurrentCalls_LoadsToolsOnce()
     {
         var (serverUrl, calls) = await StartMcpServerAsync();
-        var registry = new McpServerToolRegistry(
+        using var registry = new McpServerToolRegistry(
             new McpPluginsConfig
             {
                 Enabled = true,
@@ -185,7 +184,7 @@ public sealed class McpServerToolRegistryTests : IAsyncDisposable
                 }
             }
         };
-        var registry = new McpServerToolRegistry(config, NullLogger<McpServerToolRegistry>.Instance);
+        using var registry = new McpServerToolRegistry(config, NullLogger<McpServerToolRegistry>.Instance);
         using var nativeRegistry = new NativePluginRegistry(new NativePluginsConfig(), NullLogger.Instance, new ToolingConfig());
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => registry.RegisterToolsAsync(nativeRegistry, CancellationToken.None));
@@ -207,7 +206,7 @@ public sealed class McpServerToolRegistryTests : IAsyncDisposable
     public async Task LoadAsync_UsesRequestTimeoutForToolListing_NotStartupTimeout()
     {
         var (serverUrl, _) = await StartMcpServerAsync(TimeSpan.FromSeconds(2));
-        var registry = new McpServerToolRegistry(
+        using var registry = new McpServerToolRegistry(
             new McpPluginsConfig
             {
                 Enabled = true,

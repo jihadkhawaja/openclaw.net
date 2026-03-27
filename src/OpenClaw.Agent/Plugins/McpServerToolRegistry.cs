@@ -194,8 +194,19 @@ public sealed class McpServerToolRegistry : IDisposable
             acquired = _loadSemaphore.Wait(TimeSpan.FromSeconds(5));
             if (!acquired)
             {
-                _logger.LogWarning("McpServerToolRegistry.Dispose() timed out waiting for load semaphore");
+                _logger.LogWarning("McpServerToolRegistry.Dispose() timed out waiting for load semaphore, waiting indefinitely to ensure load completes");
+                _loadSemaphore.Wait();
+                acquired = true;
             }
+        }
+        catch (ObjectDisposedException)
+        {
+            _logger.LogWarning("McpServerToolRegistry.Dispose() encountered disposed semaphore, load may have completed concurrently");
+            return;
+        }
+
+        try
+        {
             foreach (var client in _clients)
             {
                 try
@@ -249,8 +260,10 @@ public sealed class McpServerToolRegistry : IDisposable
         var resolved = new Dictionary<string, string?>(StringComparer.Ordinal);
         foreach (var (name, rawValue) in environment)
         {
-            var value = SecretResolver.Resolve(rawValue) ?? rawValue;
-            resolved[name] = value;
+            var value = SecretResolver.Resolve(rawValue);
+            if (value is null && rawValue.StartsWith("env:", StringComparison.Ordinal))
+                throw new InvalidOperationException($"Environment variable '{name}' references unset env var '{rawValue[4..]}'");
+            resolved[name] = value ?? rawValue;
         }
 
         return resolved;
@@ -264,8 +277,10 @@ public sealed class McpServerToolRegistry : IDisposable
         var resolved = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var (name, rawValue) in headers)
         {
-            var value = SecretResolver.Resolve(rawValue) ?? rawValue;
-            resolved[name] = value;
+            var value = SecretResolver.Resolve(rawValue);
+            if (value is null && rawValue.StartsWith("env:", StringComparison.Ordinal))
+                throw new InvalidOperationException($"Header '{name}' references unset env var '{rawValue[4..]}'");
+            resolved[name] = value ?? rawValue;
         }
 
         return resolved;
