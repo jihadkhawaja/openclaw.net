@@ -42,6 +42,8 @@ internal static class RuntimeInitializationExtensions
             services.Pipeline,
             startup.WorkspacePath,
             services.RuntimeMetrics);
+        if (config.Plugins.Mcp.Enabled)
+            await services.McpRegistry.RegisterToolsAsync(services.NativeRegistry, app.Lifetime.ApplicationStopping);
 
         LlmClientFactory.ResetDynamicProviders();
         try
@@ -186,7 +188,8 @@ internal static class RuntimeInitializationExtensions
             ToolSandbox = app.Services.GetService<IToolSandbox>(),
             Pipeline = app.Services.GetRequiredService<MessagePipeline>(),
             WebSocketChannel = app.Services.GetRequiredService<WebSocketChannel>(),
-            NativeRegistry = app.Services.GetRequiredService<NativePluginRegistry>()
+            NativeRegistry = app.Services.GetRequiredService<NativePluginRegistry>(),
+            McpRegistry = app.Services.GetRequiredService<McpServerToolRegistry>()
         };
 
     private static async Task<ChannelComposition> BuildChannelCompositionAsync(
@@ -955,6 +958,7 @@ internal static class RuntimeInitializationExtensions
         public required MessagePipeline Pipeline { get; init; }
         public required WebSocketChannel WebSocketChannel { get; init; }
         public required NativePluginRegistry NativeRegistry { get; init; }
+        public required McpServerToolRegistry McpRegistry { get; init; }
     }
 
     private sealed class ChannelComposition

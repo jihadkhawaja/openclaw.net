@@ -14,6 +14,7 @@ public sealed class NativePluginRegistry : IDisposable
 {
     private readonly List<ITool> _tools = [];
     private readonly Dictionary<string, string> _nativeToolIds = new(StringComparer.Ordinal);
+    private readonly List<IDisposable> _ownedResources = [];
     private readonly ILogger _logger;
 
     public NativePluginRegistry(NativePluginsConfig config, ILogger logger, ToolingConfig? toolingConfig = null)
@@ -75,13 +76,42 @@ public sealed class NativePluginRegistry : IDisposable
         if (_nativeToolIds.ContainsKey(tool.Name))
         {
             _logger.LogWarning("Duplicate native tool name '{ToolName}' from plugin '{PluginId}' — overwriting previous registration", tool.Name, pluginId);
+            var displacedTools = _tools.Where(t => t.Name == tool.Name).ToArray();
             _tools.RemoveAll(t => t.Name == tool.Name);
+            foreach (var displaced in displacedTools)
+            {
+                if (!ReferenceEquals(displaced, tool) && displaced is IDisposable disposable)
+                {
+                    try
+                    {
+                        disposable.Dispose();
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex,
+                            "Failed to dispose displaced native tool '{ToolName}' while registering plugin '{PluginId}'",
+                            tool.Name,
+                            pluginId);
+                    }
+                }
+            }
         }
 
         _tools.Add(tool);
         _nativeToolIds[tool.Name] = pluginId;
         _logger.LogInformation("Native plugin enabled: {PluginId}{Detail}",
             pluginId, detail is not null ? $" ({detail})" : "");
+    }
+
+    public void RegisterExternalTool(ITool tool, string pluginId, string? detail = null)
+        => RegisterTool(tool, pluginId, detail);
+
+    public void RegisterOwnedResource(IDisposable resource)
+    {
+        ArgumentNullException.ThrowIfNull(resource);
+        if (_ownedResources.Any(existing => ReferenceEquals(existing, resource)))
+            return;
+        _ownedResources.Add(resource);
     }
 
     /// <summary>
@@ -207,7 +237,28 @@ public sealed class NativePluginRegistry : IDisposable
         foreach (var tool in _tools)
         {
             if (tool is IDisposable d)
-                d.Dispose();
+            {
+                try
+                {
+                    d.Dispose();
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to dispose native tool '{ToolName}' during registry shutdown", tool.Name);
+                }
+            }
+        }
+
+        foreach (var resource in _ownedResources)
+        {
+            try
+            {
+                resource.Dispose();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to dispose owned native-plugin resource during registry shutdown");
+            }
         }
     }
 }
