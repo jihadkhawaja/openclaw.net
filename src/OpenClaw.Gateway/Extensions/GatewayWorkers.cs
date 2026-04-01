@@ -370,6 +370,9 @@ internal static class GatewayWorkers
                             if (msg.ChannelId == "telegram") policy = config.Channels.Telegram.DmPolicy;
                             if (msg.ChannelId == "whatsapp") policy = config.Channels.WhatsApp.DmPolicy;
                             if (msg.ChannelId == "teams") policy = config.Channels.Teams.DmPolicy;
+                            if (msg.ChannelId == "slack") policy = config.Channels.Slack.DmPolicy;
+                            if (msg.ChannelId == "discord") policy = config.Channels.Discord.DmPolicy;
+                            if (msg.ChannelId == "signal") policy = config.Channels.Signal.DmPolicy;
 
                             if (policy is "closed")
                                 continue; // Silently drop all inbound messages
@@ -390,11 +393,26 @@ internal static class GatewayWorkers
                                 continue; // Drop the inbound request after sending pairing code
                             }
 
+                            // ── Multi-Agent Route Resolution ─────────────────
+                            OpenClaw.Core.Models.AgentRouteConfig? resolvedRoute = null;
+                            if (config.Routing.Enabled)
+                            {
+                                var routeResolver = new OpenClaw.Gateway.Integrations.AgentRouteResolver(config.Routing);
+                                resolvedRoute = routeResolver.Resolve(msg.ChannelId, msg.SenderId);
+                            }
+
                             session = msg.SessionId is not null
                                 ? await sessionManager.GetOrCreateByIdAsync(msg.SessionId, msg.ChannelId, conversationRecipientId, lifetime.ApplicationStopping)
                                 : await sessionManager.GetOrCreateAsync(msg.ChannelId, conversationRecipientId, lifetime.ApplicationStopping);
                             if (session is null)
                                 throw new InvalidOperationException("Session manager returned null session.");
+
+                            // Apply route overrides to session
+                            if (resolvedRoute is not null)
+                            {
+                                if (resolvedRoute.ModelOverride is not null)
+                                    session.ModelOverride ??= resolvedRoute.ModelOverride;
+                            }
 
                             initialInputTokens = session.TotalInputTokens;
                             initialOutputTokens = session.TotalOutputTokens;
@@ -617,6 +635,14 @@ internal static class GatewayWorkers
                                 var suppressHeartbeatDelivery = heartbeatService.ShouldSuppressResult(msg.CronJobName, responseText);
                                 if (heartbeatService.IsManagedHeartbeatJob(msg.CronJobName))
                                     heartbeatService.RecordResult(session, responseText, suppressHeartbeatDelivery, inputTokenDelta, outputTokenDelta);
+
+                                // Append verbose mode footer (tool calls and token delta)
+                                if (session.VerboseMode)
+                                {
+                                    var lastTurn = session.History.Count > 0 ? session.History[^1] : null;
+                                    var toolCallCount = lastTurn?.ToolCalls?.Count ?? 0;
+                                    responseText += $"\n\n---\n🔧 {toolCallCount} tool call(s) | ↑ {inputTokenDelta} in / {outputTokenDelta} out tokens (this turn)";
+                                }
 
                                 // Append Usage Tracking string if configured
                                 if (config.UsageFooter is "tokens")
