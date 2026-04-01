@@ -225,6 +225,15 @@ internal static class RuntimeInitializationExtensions
         if (config.Channels.Teams.Enabled)
             channelAdapters["teams"] = app.Services.GetRequiredService<TeamsChannel>();
 
+        if (config.Channels.Slack.Enabled)
+            channelAdapters["slack"] = app.Services.GetRequiredService<SlackChannel>();
+
+        if (config.Channels.Discord.Enabled)
+            channelAdapters["discord"] = app.Services.GetRequiredService<DiscordChannel>();
+
+        if (config.Channels.Signal.Enabled)
+            channelAdapters["signal"] = app.Services.GetRequiredService<SignalChannel>();
+
         var whatsAppWorkerHost = await CreateWhatsAppChannelAsync(app, startup, services, loggerFactory, channelAdapters);
 
         if (config.Plugins.Native.Email.Enabled)
@@ -452,7 +461,29 @@ internal static class RuntimeInitializationExtensions
             new TodoTool(services.SessionMetadataStore),
             new AutomationTool(services.AutomationService, services.Pipeline),
             new VisionAnalyzeTool(services.GeminiMultimodalService),
-            new TextToSpeechTool(services.TextToSpeechService)
+            new TextToSpeechTool(services.TextToSpeechService),
+
+            // Core dev tools
+            new EditFileTool(config.Tooling),
+            new ApplyPatchTool(config.Tooling),
+
+            // Session management tools
+            new SessionsHistoryTool(services.SessionManager, services.MemoryStore),
+            new SessionsSendTool(services.SessionManager, services.Pipeline),
+            new SessionsSpawnTool(services.SessionManager, services.Pipeline),
+            new SessionStatusTool(services.SessionManager),
+            new AgentsListTool(config.Delegation),
+
+            // System management tools
+            new CronTool(services.CronJobSource, services.Pipeline),
+            new GatewayTool(services.RuntimeMetrics, services.SessionManager, config),
+
+            // Communication & data tools
+            new MessageTool(services.Pipeline),
+            new XSearchTool(config),
+            new MemoryGetTool(services.MemoryStore),
+            new ProfileWriteTool(services.UserProfileStore),
+            new SessionsYieldTool(services.SessionManager, services.Pipeline, services.MemoryStore),
         };
 
         if (config.Tooling.EnableBrowserTool)

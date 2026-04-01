@@ -12,6 +12,73 @@
 - Startup/runtime composition split into explicit service, channel, plugin, and runtime assembly stages.
 - Optional native Notion scratchpad integration with scoped read/write tools (`notion`, `notion_write`), allowlists, and write approvals by default.
 
+## Runtime and Platform Expansion
+
+These are strong candidates for the next roadmap phases because they extend the current runtime, channel, and operator model without fighting the existing architecture.
+
+### Channel Expansion
+
+1. **Discord channel adapter**
+   - Add a new `IChannelAdapter` for Discord bot integrations.
+   - Support DMs, server channels, allowlists, slash commands, and thread-to-session mapping.
+   - Keep voice-channel handling separate from transcription so the initial scope stays text-first.
+
+2. **Slack channel adapter**
+   - Add bot/app token support with workspace allowlisting.
+   - Map Slack threads to OpenClaw sessions.
+   - Support slash commands and channel-friendly rich formatting.
+
+3. **Signal channel adapter**
+   - Add a privacy-focused Signal bridge using Signal CLI or `signald`.
+   - Start with DM-only support and optional no-content logging mode.
+   - Treat group support as a later follow-up rather than part of the first release.
+
+### Multimodal and Input Expansion
+
+4. **Voice memo transcription**
+   - Detect inbound audio across supported channels and route it through a transcription provider.
+   - Inject transcript text into the runtime before the normal agent turn starts.
+   - Provide clear degraded behavior when transcription is disabled or unavailable.
+
+5. **Checkpoint and resume for long-running tasks**
+   - Persist structured save points during multi-step execution.
+   - Allow interrupted or restarted sessions to resume from the last completed checkpoint.
+   - Start with checkpointing after successful tool batches instead of trying to snapshot every internal runtime state transition.
+
+6. **Mixture-of-agents execution**
+   - Fan out a prompt to multiple providers and synthesize a final answer from their outputs.
+   - Expose this as an optional high-cost/high-confidence runtime mode or explicit tool.
+   - Keep it profile-driven so it can be limited to selected models and use cases.
+
+### Execution and Deployment Options
+
+7. **Daytona execution backend**
+   - Add a remote workspace backend with hibernation and resume support.
+   - Fit it into the existing `IExecutionBackend` and process execution model rather than adding a separate tool path.
+   - Useful for persistent remote development-style sandboxes.
+
+8. **Modal execution backend**
+   - Add a serverless execution backend for short-lived compute-heavy tasks.
+   - Focus on one-shot and bounded process execution first.
+   - Treat GPU-enabled workloads as an optional extension once the base backend is stable.
+
+### Operator Visibility and Safety
+
+9. **CLI/TUI insights**
+   - Add an `openclaw insights` command and matching TUI panel.
+   - Summarize provider usage, token spend, tool frequency, and session counts from existing telemetry.
+   - Prefer operator-readable summaries over introducing a new analytics subsystem.
+
+10. **URL safety validation**
+   - Add SSRF-oriented URL validation in web fetch and browser tooling.
+   - Block loopback/private targets by default and allow optional blocklists.
+   - Keep this configurable, but make the safe path easy to enable globally.
+
+11. **Trajectory export**
+   - Export prompts, tool calls, results, and responses as JSONL for analysis or training pipelines.
+   - Support date-range or session-scoped export plus optional anonymization.
+   - Expose it through admin and CLI surfaces instead of burying it in storage internals.
+
 ## Security Hardening (Likely Breaking)
 
 These are worthwhile changes, but they can break existing deployments or require new configuration.

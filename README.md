@@ -32,8 +32,11 @@ If this repo is useful to you, please star it.
 
 - A multi-step **agent runtime** with tool calling, retries, per-call timeouts, streaming, circuit-breaker behavior, context compaction, and optional parallel tool execution
 - A dedicated **tool execution layer** with approval flows, hooks, usage tracking, deterministic failure handling, and sandbox routing
-- **Skills**, memory-backed sessions, memory recall injection, project memory, and delegated sub-agents
-- A **gateway layer** for browser UI, WebSocket, OpenAI-compatible endpoints, a typed integration API, MCP, webhooks, auth, rate limits, and observability
+- **Skills**, memory-backed sessions, memory recall injection, project memory, delegated sub-agents, session search, user profiles, and session-scoped todo state
+- A review-first **self-evolving loop** with learning proposals, profile updates, managed skill drafts, and automation suggestions that require explicit approval before activation
+- A **gateway layer** for browser UI, live webchat, WebSocket, OpenAI-compatible endpoints, a typed integration API, MCP, webhooks, auth, rate limits, and observability
+- Native **multimodal and realtime** capabilities including vision analysis, text-to-speech, provider-routed live sessions, and browser/CLI/TUI live clients
+- Built-in and webhook-driven **channel adapters** for Telegram, Twilio SMS, WhatsApp, Teams, Slack, Discord, Signal, email, and generic webhooks
 - Practical **OpenClaw ecosystem** compatibility: JS/TS bridge plugins, standalone `SKILL.md` packages, and native dynamic plugins in `jit`
 - Two runtime lanes (**`aot`** and **`jit`**) plus an optional **MAF orchestrator** in MAF-enabled artifacts
 
@@ -142,8 +145,9 @@ Then open one of:
 
 | Surface | URL |
 |---------|-----|
-| Web UI | `http://127.0.0.1:18789/chat` |
+| Web UI / Live Chat | `http://127.0.0.1:18789/chat` |
 | WebSocket | `ws://127.0.0.1:18789/ws` |
+| Live WebSocket | `ws://127.0.0.1:18789/ws/live` |
 | Integration API | `http://127.0.0.1:18789/api/integration/status` |
 | MCP endpoint | `http://127.0.0.1:18789/mcp` |
 | OpenAI-compatible | `http://127.0.0.1:18789/v1/responses` |
@@ -162,6 +166,9 @@ Then open one of:
 ```bash
 # CLI chat
 dotnet run --project src/OpenClaw.Cli -c Release -- chat
+
+# CLI live session
+dotnet run --project src/OpenClaw.Cli -c Release -- live --provider gemini
 
 # One-shot CLI run
 dotnet run --project src/OpenClaw.Cli -c Release -- run "summarize this README" --file ./README.md
@@ -284,14 +291,29 @@ See [Security Guide](SECURITY.md) for full hardening guidance and [Sandboxing Gu
 
 ## Channels
 
-OpenClaw.NET supports inbound channels for **Telegram**, **Twilio SMS**, **WhatsApp**, and **generic webhooks**, each with configurable body limits, allowlists, and signature validation.
+OpenClaw.NET includes channel adapters and webhook surfaces for text-first messaging across the built-in gateway. The currently implemented set spans **Telegram**, **Twilio SMS**, **WhatsApp**, **Teams**, **Slack**, **Discord**, **Signal**, **email**, and **generic webhooks**.
+
+These adapters are policy-aware and fit into the same runtime/session pipeline, but operational maturity is not identical across all providers. Newer adapters should be treated as early support until their setup docs and test coverage catch up.
 
 | Channel | Webhook path | Setup guide |
 |---------|-------------|-------------|
 | Telegram | `/telegram/inbound` | [User Guide](docs/USER_GUIDE.md) |
 | Twilio SMS | `/twilio/sms/inbound` | [User Guide](docs/USER_GUIDE.md) |
 | WhatsApp | configurable | [WhatsApp Setup](docs/WHATSAPP_SETUP.md) |
+| Teams | `/api/messages` | [User Guide](docs/USER_GUIDE.md) |
+| Slack | `/slack/events`, `/slack/commands` | Config in `Channels:Slack` |
+| Discord | `/discord/interactions` | Config in `Channels:Discord` |
+| Signal | adapter-driven (`signald` or `signal-cli`) | Config in `Channels:Signal` |
 | Generic webhooks | `/webhooks/{name}` | [User Guide](docs/USER_GUIDE.md) |
+
+## Learning and Automation
+
+OpenClaw.NET now includes a review-first learning path instead of silent self-modification.
+
+- Completed sessions and automation runs can produce **learning proposals** for managed skill drafts, user profile updates, and automation suggestions
+- Learned changes are stored as **pending proposals** until an operator explicitly approves or rejects them
+- The runtime can use **session search**, **profile recall**, and **automation state** directly as part of ongoing execution
+- Automations are first-class objects with schedules, delivery targets, previews, run-now, pause, and resume support
 
 ## Observability
 
