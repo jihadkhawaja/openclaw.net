@@ -12,7 +12,7 @@
 
 > **Disclaimer**: This project is not affiliated with, endorsed by, or associated with [OpenClaw](https://github.com/openclaw/openclaw). It is an independent .NET implementation inspired by their work.
 
-Self-hosted **AI agent runtime and gateway for .NET** with 48 native tools, 9 channel adapters, multi-agent routing, review-first self-evolving features, built-in tool presets, NativeAOT support, and practical OpenClaw ecosystem compatibility.
+Self-hosted **AI agent runtime and gateway for .NET** with 48 native tools, 9 channel adapters, multi-agent routing, review-first self-evolving features, built-in OpenAI/Claude/Gemini provider support, built-in tool presets, NativeAOT support, and practical OpenClaw ecosystem compatibility.
 
 ## Why This Project Exists
 
@@ -25,6 +25,7 @@ OpenClaw.NET takes a different path:
 - A real **tool execution layer** with approval hooks, timeout handling, usage tracking, and optional sandbox routing
 - **48 native tools** covering file ops, sessions, memory, web search, messaging, home automation, databases, email, calendar, and more
 - **9 channel adapters** (Telegram, SMS, WhatsApp, Teams, Slack, Discord, Signal, email, webhooks) with DM policy, allowlists, and signature validation
+- **Native LLM providers out of the box** for **OpenAI**, **Claude / Anthropic**, and **Gemini**, plus Azure OpenAI, Ollama, and OpenAI-compatible endpoints
 - **Review-first self-evolving workflows** that can propose profile updates, automation drafts, and skill drafts from repeated successful sessions
 - A foundation for **production-oriented agent infrastructure in .NET**
 
@@ -39,6 +40,17 @@ If this repo is useful to you, please star it.
 - Delegated sub-agents with configurable profiles, tool restrictions, and depth limits
 - Multi-agent routing — route channels/senders with per-route model, prompt, tool preset, and tool allowlist overrides
 - Persistent session search, user profiles, and session-scoped todo state available to the agent and operators
+
+### Built-In Providers
+
+- **OpenAI** via `Provider: "openai"`
+- **Claude / Anthropic** via `Provider: "anthropic"` or `Provider: "claude"`
+- **Gemini** via `Provider: "gemini"` or `Provider: "google"`
+- **Azure OpenAI** via `Provider: "azure-openai"`
+- **Ollama** via `Provider: "ollama"`
+- **OpenAI-compatible** endpoints via `Provider: "openai-compatible"`, `groq`, `together`, or `lmstudio`
+
+OpenClaw registers OpenAI, Claude, and Gemini natively at startup, so a fresh install only needs a provider id, model, and API key to get going.
 
 ### Review-First Learning
 
@@ -221,6 +233,8 @@ graph LR
 git clone https://github.com/clawdotnet/openclaw.net
 cd openclaw.net
 
+export OpenClaw__Llm__Provider="openai"   # or: anthropic / claude / gemini
+export OpenClaw__Llm__Model="gpt-4.1"
 export MODEL_PROVIDER_KEY="your-api-key"
 
 # Validate config (optional)
@@ -268,9 +282,30 @@ dotnet run --project src/OpenClaw.Cli -c Release -- tui
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `MODEL_PROVIDER_KEY` | — | LLM provider API key |
+| `OpenClaw__Llm__Provider` | `openai` | Built-in provider id (`openai`, `anthropic`, `claude`, `gemini`, `google`, `azure-openai`, `ollama`) |
+| `OpenClaw__Llm__Model` | provider-specific | Default model id for the selected provider |
 | `OPENCLAW_WORKSPACE` | — | Workspace directory for file tools |
 | `OPENCLAW_AUTH_TOKEN` | — | Auth token (required for non-loopback) |
 | `OpenClaw__Runtime__Mode` | `auto` | Runtime lane (`aot`, `jit`, or `auto`) |
+
+**Common provider examples:**
+
+```bash
+# OpenAI
+export OpenClaw__Llm__Provider="openai"
+export OpenClaw__Llm__Model="gpt-4.1"
+export MODEL_PROVIDER_KEY="sk-..."
+
+# Claude
+export OpenClaw__Llm__Provider="claude"
+export OpenClaw__Llm__Model="claude-sonnet-4-5"
+export MODEL_PROVIDER_KEY="sk-ant-..."
+
+# Gemini
+export OpenClaw__Llm__Provider="gemini"
+export OpenClaw__Llm__Model="gemini-2.5-flash"
+export MODEL_PROVIDER_KEY="AIza..."
+```
 
 See the full [Quickstart Guide](docs/QUICKSTART.md) for deployment notes.
 
